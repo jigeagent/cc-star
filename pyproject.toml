@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cc-star"
+version = "0.1.0"
+description = "Upgrade Claude Code native memory to digital-life memory — SQLite hot storage + FTS5 retrieval + optional OpenViking cold sync"
+license = { text = "AGPL-3.0-or-later" }
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.28",
+    "pyyaml>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/jigeagent/cc-star"
+
+[project.scripts]
+cc-star = "cc_star.cli:main"
+
+[tool.hatch.build]
+exclude = ["tests/"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
