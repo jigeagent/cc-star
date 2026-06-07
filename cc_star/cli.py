@@ -4,10 +4,20 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import sys
 from pathlib import Path
+
+# Reconfigure stdout for Windows terminals — use UTF-8, replace, don't crash
+if hasattr(sys.stdout, "buffer"):
+    sys.stdout = io.TextIOWrapper(
+        sys.stdout.buffer,
+        encoding="utf-8",
+        errors="replace",
+        line_buffering=True,
+    )
 
 from cc_star.cache.connection import CacheConnection
 from cc_star.cache.schema import ensure_schema
@@ -128,6 +138,13 @@ def cmd_status(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _safe(text: str, maxlen: int = 100) -> str:
+    """Truncate and normalize whitespace for console output."""
+    if not text:
+        return ""
+    return text.replace("\n", " ")[:maxlen]
+
+
 def cmd_search(args: argparse.Namespace) -> None:
     """Search local memory."""
     cfg_mgr = _get_config_manager()
@@ -154,8 +171,8 @@ def cmd_search(args: argparse.Namespace) -> None:
 
         for i, t in enumerate(results, 1):
             ts = (t.created_at or "")[:10]
-            user_preview = (t.user_content or "")[:100].replace("\n", " ")
-            assistant_preview = (t.assistant_content or "")[:100].replace("\n", " ")
+            user_preview = _safe(t.user_content, 100)
+            assistant_preview = _safe(t.assistant_content, 100)
 
             print(f"{i}. [{ts}] user: {user_preview}")
             if assistant_preview:
