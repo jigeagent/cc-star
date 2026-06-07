@@ -1,14 +1,19 @@
 # cc-star
 
-**Claude Code memory upgrade kit.**
+**不是日记本，是认知引擎。**
+**Not a notebook. A cognition engine.**
 
-Upgrade Claude Code's native `MEMORY.md` (a plain text file that gets constantly truncated) into a **digital-life memory system** — local SQLite hot storage + FTS5 retrieval + cognitive pipeline + optional OpenViking cold sync.
+Claude Code's native memory is a notebook — it writes down what you did.
+cc-star is an engine — it learns *why* it worked and turns that into reusable strategy.
+
+Stop storing. Start growing.
 
 ```
-pip install cc-star
-cc-star init
-# 30 seconds → permanent, searchable, self-evolving memory
+pip install cc-star && cc-star init
+# 30 seconds → your Claude Code starts learning from every conversation
 ```
+
+Built on a **L1→L2→L3 cognitive pipeline**: raw conversations → rewarded patterns → crystallized skills. No other memory system for Claude Code does this.
 
 ## Features
 
