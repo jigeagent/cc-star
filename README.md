@@ -2,12 +2,12 @@
 
 **Claude Code memory upgrade kit.**
 
-Upgrade Claude Code's native `MEMORY.md` (a plain text file that gets constantly truncated) into a **digital-life memory system** — local SQLite hot storage + FTS5 retrieval + optional OpenViking cold sync.
+Upgrade Claude Code's native `MEMORY.md` (a plain text file that gets constantly truncated) into a **digital-life memory system** — local SQLite hot storage + FTS5 retrieval + cognitive pipeline + optional OpenViking cold sync.
 
 ```
 pip install cc-star
 cc-star init
-# 30 seconds → permanent, searchable, offline-capable memory
+# 30 seconds → permanent, searchable, self-evolving memory
 ```
 
 ## Features
@@ -15,9 +15,18 @@ cc-star init
 - **Persistent storage** — every conversation turn saved to local SQLite database
 - **Full-text search** — FTS5-powered memory retrieval across all past conversations
 - **Context injection** — automatically injects relevant past memories before each prompt
+- **Cognitive pipeline** — turns raw conversation history into structured knowledge:
+  - **L1 Capture** — auto-collect every turn with metadata (tags, agent name, timestamps)
+  - **Reward Engine** — apply outcome signals (success/failure/correction), backpropagate temporal discounts
+  - **L2 Policy Induction** — extract reusable patterns from successful outcomes, build candidate pool with confidence scoring
+  - **L3 Skill Crystallization** — promote high-frequency patterns into callable skills with test cases and trigger conditions
+  - **World Model** — cluster concepts from memory, extract entity-relation triples for associative retrieval
 - **Compression protection** — preserves critical context (MEMORY.md, STATUS.md) across Claude Code compaction events
-- **Optional OpenViking sync** — cold storage with semantic search (install with `cc-star[ov]`)
+- **Optional OpenViking sync** — cold storage with semantic search
+- **Built-in viewer** — embedded SPA web UI to browse traces, policies, skills, concepts
 - **Zero Claude Code config** — `cc-star init` handles all hook registration
+
+> **Why cc-star stands out:** Most Claude Code memory systems stop at "store + search." cc-star goes further — it *thinks* about what it stores. The cognitive pipeline automatically distills raw conversations into policies, skills, and conceptual knowledge, turning your AI's experience into an ever-improving knowledge base. No other open-source memory system for Claude Code offers this capability.
 
 ## Quick Start
 
@@ -77,24 +86,66 @@ hooks:
 ## Architecture
 
 ```
-Claude Code → 5 Hook Scripts → cache.db (SQLite+FTS5) → [optional] OpenViking
-                ↑
-           cc-star init
-                ↓
-          string.Template → ~/.cc-star/hooks/*.py
+┌─────────────────────────────────────────────────────┐
+│                    cc-star                            │
+│  ┌──────────┐  ┌─────────────────────────────────┐   │
+│  │  CLI      │  │  5 Hook Scripts (auto-run)       │   │
+│  │  init     │  │  ├─ SessionStart  → last session │   │
+│  │  status   │  │  ├─ Inject        → FTS5+OV检索   │   │
+│  │  search   │  │  ├─ Store         → 存储本轮对话   │   │
+│  │  config   │  │  ├─ Summary       → 摘要+批量同步   │   │
+│  │  viewer   │  │  └─ Compact       → 压缩保护       │   │
+│  └──────────┘  └────────┬───────────┬───────────┘   │
+│                          │           │                 │
+│              ┌───────────▼───────────▼────┐            │
+│              │    Cognitive Pipeline       │            │
+│              │  L1 Capture → Reward → L2   │            │
+│              │  Policy Induction → L3 Skill │            │
+│              │  Crystallization → World     │            │
+│              │  Model (concepts + triples)  │            │
+│              └───────────┬─────────────────┘            │
+│                          │                              │
+│              ┌───────────▼──────────────────┐            │
+│              │     Storage Layer              │            │
+│              │  ┌─────────┐  ┌────────────┐   │            │
+│              │  │ SQLite  │  │ OpenViking  │   │            │
+│              │  │ + FTS5  │  │ (optional)  │   │            │
+│              │  │ 热存     │  │ 冷存·语义检索 │   │            │
+│              │  └─────────┘  └────────────┘   │            │
+│              └─────────────────────────────────┘            │
+└─────────────────────────────────────────────────────────────┘
 ```
+
+### Hook Flow
 
 - **SessionStart** — checks OV health, shows last session summary
 - **UserPromptSubmit (inject)** — FTS5 + optional OV semantic search, RRF merge, injects as `additionalContext`
-- **Stop (store)** — reads transcript, extracts last turn, writes to cache.db
+- **Stop (store)** — reads transcript, extracts last turn, writes to cache.db + L1 Capture
 - **SessionEnd (summary)** — extracts session summary, batch syncs to OV
 - **PreCompact/PostCompact (compact)** — preserves MEMORY.md / STATUS.md / OV snapshot across compression
 
+### Cognitive Pipeline Flow
+
+```
+Raw Turn → L1 Capture → Reward Signal → L2 Policy Induction → L3 Skill Crystallization
+                                         ↓
+                                    World Model
+                              (concept clustering +
+                               entity-relation triples)
+```
+
+- **L1 Capture** — every turn is captured with turn index, session context, tags, and agent identity
+- **Reward** — outcome signals (success/failure/correction) are applied with temporal discount backpropagation
+- **L2 Policy** — successful patterns are clustered into policy candidates with confidence scores that update over time
+- **L3 Skill** — high-confidence patterns are crystallized into executable skills with trigger conditions and test cases
+- **World Model** — concepts are extracted and clustered; entity-relation triples enable associative retrieval
+
 ## Dependencies
 
-- **hermes-next** (>=0.2) — SQLite cache + FTS5 retrieval engine
+- **httpx** (>=0.28) — HTTP client for OpenViking sync
 - **pyyaml** (>=6.0) — YAML config parsing
-- **openviking** (optional, >=0.3.22) — OpenViking cold storage client
+- **numpy** (>=1.24) — vector operations for cognitive pipeline
+- **openviking** (optional) — OpenViking cold storage client
 
 ## License
 
