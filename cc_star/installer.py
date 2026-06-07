@@ -94,7 +94,7 @@ def _build_hook_config(
         script_path = hooks_dir / info["template"]
         timeout = config.get("hooks", {}).get(info["timeout_key"], 10)
 
-        cmd_parts = ["python", str(script_path)]
+        cmd_parts = ["python", script_path.as_posix()]
         if info.get("args"):
             cmd_parts.extend(info["args"])
 

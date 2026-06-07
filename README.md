@@ -52,6 +52,18 @@ cc-star search "how did we fix the auth bug?"
 cc-star status
 ```
 
+## Windows Users
+
+cc-star works on Windows. If you run into issues, see the **[Windows Installation Guide](docs/windows-install.md)** for known pitfalls and fixes.
+
+**Quick tips for Windows:**
+- ✅ `cc-star init` (v0.2.4+) handles path formatting automatically
+- ⚠️ Put API keys in **system environment variables**, not `settings.json` `env` (Claude Code Windows bug)
+- ⚠️ If `cc-star init` was run on an older version, check hook paths in `settings.json` use forward slashes `/`
+- ✅ `claude doctor` showing ✗ for Remote Control is normal in API Key mode
+
+Run the [quick diagnosis script](docs/windows-install.md#quick-diagnosis) if something feels off.
+
 ## Commands
 
 | Command | Description |
