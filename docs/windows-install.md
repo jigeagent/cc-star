@@ -44,7 +44,16 @@ if ($missing.Count -eq 0) {
     Write-Host "[FAIL] Missing hooks: $($missing -join ', ')" -ForegroundColor Red
 }
 
-# 4. OpenViking server (if used)
+# 4. Node.js spawn check (P1 — subagent ENOENT)
+try {
+    $nodeTest = node -e "require('child_process').spawn('claude',['--version'],{stdio:'pipe'}).on('error',()=>process.exit(1)).on('exit',()=>process.exit(0))" 2>&1
+    Write-Host "[PASS] Node.js can spawn claude subprocess" -ForegroundColor Green
+} catch {
+    Write-Host "[FAIL] Node.js cannot spawn claude — subagent/Workflow will fail" -ForegroundColor Red
+    Write-Host "       Fix: see 'P1 - claude not found by Node.js spawn' section" -ForegroundColor Yellow
+}
+
+# 5. OpenViking server (if used)
 try {
     $ov = (Invoke-WebRequest http://localhost:1933/health -TimeoutSec 3).Content
     Write-Host "[PASS] OpenViking server running" -ForegroundColor Green
@@ -197,7 +206,57 @@ Configure a Windows scheduled task `OpenViking-AutoStart` to launch the server a
 
 ---
 
-## ℹ️ P2 — `claude doctor` Remote Control ✗ is normal
+## 🟡 P1 — `claude` not found by Node.js `spawn()` (subagent ENOENT)
+
+### Symptom
+
+```
+Error: spawn claude ENOENT
+```
+or
+```
+agent failed: failed to spawn claude: spawn claude ENOENT
+```
+
+`which claude` works in bash, but Claude Code multi-agent features fail.
+
+### Root cause
+
+Node.js on Windows uses the **native Windows PATH** (not the Git Bash PATH) when spawning subprocesses without `shell: true`. If `claude` resolves to a `.cmd` shim (which can't be spawned directly) or the `claude.exe` directory isn't in the Windows environment PATH, you get ENOENT.
+
+### Fix
+
+**Step 1** — Ensure `claude.exe` is findable via Windows native PATH:
+
+```powershell
+# Option A: Add npm global bin dir to User PATH (permanent, needs new terminal)
+[Environment]::SetEnvironmentVariable(
+  'PATH',
+  [Environment]::GetEnvironmentVariable('PATH', 'User') +
+    ';D:\npm-global\node_modules\@anthropic-ai\claude-code\bin',
+  'User'
+)
+
+# Option B: Create a symbolic link in a directory already in Windows PATH
+# (works immediately, survives npm updates)
+cd "C:\Program Files\Python312\Scripts"
+New-Item -ItemType SymbolicLink -Name claude.exe `
+  -Target "D:\npm-global\node_modules\@anthropic-ai\claude-code\bin\claude.exe"
+```
+
+**Step 2** — Verify:
+
+```powershell
+# From a NEW terminal:
+node -e "require('child_process').spawn('claude', ['--version'], { stdio: 'pipe' })"
+# Should output: 2.1.x (Claude Code)
+```
+
+### Why symbolic link?
+
+- Survives `npm update -g @anthropic-ai/claude-code`
+- No stale copies
+- Works immediately without terminal restart (if using an already-in-PATH directory)
 
 ### Symptom
 
@@ -230,6 +289,11 @@ Use this for fresh installs or after reinstalling Windows:
 - [ ] API keys set in system/user environment variables (not just `settings.json` `env`)
 - [ ] Opened a **new terminal** and verified `claude` starts without "Not logged in"
 - [ ] `claude doctor` shows ✓ for First-party provider
+- [ ] **Node.js `spawn('claude')` works** (needed for multi-agent/Workflow):
+  ```powershell
+  node -e "require('child_process').spawn('claude', ['--version'], {stdio:'pipe'}).on('error',e=>console.log('FAIL:',e.message)).on('exit',c=>console.log('OK'))"
+  ```
+  Should print `OK`, not `FAIL`.
 - [ ] cc-star hook files exist: `~/.cc-star/hooks/{inject,store,summary,compact,session_start}.py`
 - [ ] `cc-star status` reports healthy
 - [ ] (Optional) OpenViking server running: `curl http://localhost:1933/health` → 200
