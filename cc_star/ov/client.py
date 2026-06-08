@@ -42,23 +42,28 @@ class OpenVikingClient:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        # Connection pool: 10 connections, keep-alive
-        # httpx >=0.28 removed PoolLimits; pass limits directly to transport
+        # httpx >= 0.28 removed PoolLimits and HTTPTransport(retries=...)
+        # Build a compatible transport for both old and new httpx
         try:
-            transport = httpx.HTTPTransport(
-                retries=max_retries,
-                pool_limits=httpx.PoolLimits(
-                    max_connections=10,
-                    max_keepalive_connections=5,
-                ),
-            )
-        except AttributeError:
-            # httpx >= 0.28: PoolLimits removed, use max_connections directly
-            transport = httpx.HTTPTransport(
-                retries=max_retries,
+            limits = httpx.Limits(
                 max_connections=10,
                 max_keepalive_connections=5,
             )
+        except AttributeError:
+            limits = httpx.PoolLimits(
+                max_connections=10,
+                max_keepalive_connections=5,
+            )
+
+        transport_kwargs: dict[str, Any] = {"limits": limits}
+        # retries param removed in httpx 0.28+; only pass if supported
+        import inspect
+        if hasattr(httpx.HTTPTransport, "__init__"):
+            sig = inspect.signature(httpx.HTTPTransport.__init__)
+            if "retries" in sig.parameters:
+                transport_kwargs["retries"] = max_retries
+
+        transport = httpx.HTTPTransport(**transport_kwargs)
         self._client = httpx.Client(
             base_url=self.base_url,
             headers=headers,

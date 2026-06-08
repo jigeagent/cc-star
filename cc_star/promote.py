@@ -421,15 +421,208 @@ def promote_hot_traces(dry_run: bool = False, quick: bool = False) -> dict[str, 
     return result
 
 
+# ── 4. MEMORY.md capacity management ──
+
+NATIVE_MEMORY_MAX_CHARS = 5_000
+"""Target max chars for the Claude Code MEMORY.md file. When exceeded,
+oldest auto-promoted entries are removed."""
+
+ANTI_PATTERN_MARKER = "<!-- cc-star:anti-pattern -->"
+
+
+def trim_memory_md(dry_run: bool = False) -> dict[str, Any]:
+    """Trim MEMORY.md when it exceeds the target size.
+
+    Removes oldest auto-promoted entries (marked with cc-star style headers)
+    until under limit. Manual entries are preserved.
+
+    Ported from hermes-next v0.4.0 NativeMemoryClient.trim_to_fit().
+    """
+    result: dict[str, Any] = {"action": "trim_memory_md", "dry_run": dry_run}
+    mem_path = _native_memory_path()
+    if not mem_path:
+        result["status"] = "no_native_memory"
+        return result
+
+    md_file = Path(mem_path) / "MEMORY.md"
+    if not md_file.is_file():
+        result["status"] = "no_memory_md"
+        return result
+
+    try:
+        content = md_file.read_text(encoding="utf-8")
+        size = len(content)
+        result["size_chars"] = size
+        result["max_chars"] = NATIVE_MEMORY_MAX_CHARS
+
+        if size <= NATIVE_MEMORY_MAX_CHARS:
+            result["status"] = "under_limit"
+            return result
+
+        # Split into sections by heading, keep manual ones
+        lines = content.split("\n")
+        kept: list[str] = []
+        current_section: list[str] = []
+        in_auto = False
+        removed = 0
+
+        def flush_section():
+            nonlocal current_section, in_auto, removed
+            if not current_section:
+                return
+            section_text = "\n".join(current_section)
+            is_manual = any(
+                line.strip().startswith("#") and "auto-promoted" not in line.lower()
+                for line in current_section[:3]
+            )
+            if is_manual or not in_auto:
+                kept.extend(current_section)
+            else:
+                removed += 1
+            current_section = []
+            in_auto = False
+
+        for line in lines:
+            if line.startswith("# "):
+                flush_section()
+                in_auto = "auto-promoted" in line.lower()
+            current_section.append(line)
+        flush_section()
+
+        if dry_run:
+            result["would_remove"] = removed
+            result["status"] = "would_trim"
+            return result
+
+        result["removed_sections"] = removed
+        new_content = "\n".join(kept)
+        md_file.write_text(new_content, encoding="utf-8")
+        result["new_size_chars"] = len(new_content)
+        result["status"] = "ok"
+    except Exception as e:
+        result["status"] = f"error: {e}"
+
+    return result
+
+
+# ── 5. Anti-pattern marking ──
+
+
+def mark_anti_pattern(trace_id: str, user_text: str, assistant_text: str) -> dict[str, Any]:
+    """Mark a promoted memory as an anti-pattern based on negative feedback.
+
+    Adds a visible ANTI-PATTERN banner to the promoted markdown file so
+    Claude Code sees it clearly in the next session.
+
+    Ported from hermes-next v0.4.0 Decision Repair concept.
+    """
+    result: dict[str, Any] = {"action": "mark_anti_pattern"}
+    mem_path = _native_memory_path()
+    if not mem_path:
+        result["status"] = "no_native_memory"
+        return result
+
+    # Find the promoted file for this trace
+    native_dir = Path(mem_path)
+    if not native_dir.is_dir():
+        result["status"] = "no_native_dir"
+        return result
+
+    target_file = None
+    for f in native_dir.glob("promoted_*.md"):
+        content = f.read_text(encoding="utf-8")
+        if trace_id in content:
+            target_file = f
+            break
+
+    if not target_file:
+        result["status"] = "no_matching_file"
+        return result
+
+    content = target_file.read_text(encoding="utf-8")
+    if ANTI_PATTERN_MARKER in content:
+        result["status"] = "already_marked"
+        return result
+
+    # Prepend anti-pattern banner
+    banner = (
+        f"{ANTI_PATTERN_MARKER}\n"
+        f"> ⚠️ **反模式 / Anti-Pattern** — 用户反馈该模式不推荐使用\n"
+        f"> 反馈内容: {user_text[:200]}\n"
+        f"> 标记时间: {datetime.now(timezone.utc).isoformat()}\n"
+        f"\n"
+    )
+    target_file.write_text(banner + content, encoding="utf-8")
+    result["status"] = "marked"
+    result["file"] = target_file.name
+    return result
+
+
+# ── 6. Startup recovery (lightweight) ──
+
+
+def check_startup_health() -> dict[str, Any]:
+    """Lightweight startup recovery check.
+
+    Uses a timestamp file to detect unclean shutdowns and reports
+    any anomalies. Unlike hermes-next's full session_state recovery,
+    cc-star uses a simple file-lock approach suitable for single-user
+    Claude Code scenarios.
+
+    Ported from hermes-next v0.4.0 session_state recovery concept.
+    """
+    result: dict[str, Any] = {"action": "startup_health"}
+    db_path = _cachedb_path()
+    data_dir = Path(db_path).parent
+    health_file = data_dir / ".cc_star_health"
+
+    now = datetime.now(timezone.utc)
+
+    if health_file.is_file():
+        try:
+            last_ts = datetime.fromisoformat(health_file.read_text(encoding="utf-8").strip())
+            elapsed_hours = (now - last_ts).total_seconds() / 3600
+            result["last_healthy"] = last_ts.isoformat()
+            result["elapsed_hours"] = round(elapsed_hours, 1)
+
+            if elapsed_hours > 4:
+                result["status"] = "long_gap"
+                result["warning"] = (
+                    f"上次健康关闭距今 {elapsed_hours:.0f} 小时，"
+                    f"建议运行 cc-star promote 检查记忆一致性"
+                )
+            else:
+                result["status"] = "healthy"
+        except (ValueError, OSError) as e:
+            result["status"] = "unreadable"
+            result["error"] = str(e)
+    else:
+        result["status"] = "first_run"
+        result["warning"] = "未检测到上次健康关闭记录——首次运行或非正常退出"
+
+    # Write health timestamp
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        health_file.write_text(now.isoformat(), encoding="utf-8")
+        result["health_written"] = True
+    except OSError as e:
+        result["health_written"] = False
+        result["health_error"] = str(e)
+
+    return result
+
+
 # ── Maintenance runner ──
 
 
 def run_maintenance(dry_run: bool = False) -> dict[str, Any]:
-    """Run full maintenance cycle: cache limit → dedup → promote."""
+    """Run full maintenance cycle: cache limit → dedup → promote → trim."""
     results = {
         "cache_limit": enforce_cache_limit(dry_run=dry_run),
         "native_dedup": dedup_native_memory(dry_run=dry_run),
         "hot_promote": promote_hot_traces(dry_run=dry_run),
+        "trim_memory_md": trim_memory_md(dry_run=dry_run),
+        "startup_health": check_startup_health(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     return results
