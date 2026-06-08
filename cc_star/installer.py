@@ -7,6 +7,7 @@ import os
 import shutil
 import string
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from string import Template
 from typing import Any
@@ -94,7 +95,7 @@ def _build_hook_config(
         script_path = hooks_dir / info["template"]
         timeout = config.get("hooks", {}).get(info["timeout_key"], 10)
 
-        cmd_parts = ["python", script_path.as_posix()]
+        cmd_parts = ["python", str(script_path)]
         if info.get("args"):
             cmd_parts.extend(info["args"])
 
@@ -124,12 +125,25 @@ def _merge_hooks(
             # Append hooks that don't already exist (check by script path)
             existing_scripts = set()
             for h in existing_hooks[event]:
-                if isinstance(h, dict):
-                    existing_scripts.add(h.get("command", ""))
+                if isinstance(h, dict) and "command" in h:
+                    # Normalize path separators for dedup
+                    existing_scripts.add(h["command"].replace("\\", "/"))
+                elif isinstance(h, dict) and "hooks" in h:
+                    for sub in h.get("hooks", []):
+                        if isinstance(sub, dict) and "command" in sub:
+                            existing_scripts.add(sub["command"].replace("\\", "/"))
 
             for h in hooks:
-                if isinstance(h, dict) and h.get("command", "") not in existing_scripts:
-                    existing_hooks[event].append(h)
+                if isinstance(h, dict):
+                    cmd = h.get("command", "").replace("\\", "/")
+                    if cmd not in existing_scripts:
+                        existing_hooks[event].append(h)
+                    # Also check nested hooks format
+                    elif isinstance(h, dict) and "hooks" in h:
+                        for sub in h.get("hooks", []):
+                            sub_cmd = sub.get("command", "").replace("\\", "/")
+                            if sub_cmd not in existing_scripts:
+                                existing_hooks[event].append(h)
 
     result["hooks"] = existing_hooks
     return result
@@ -154,6 +168,12 @@ def _get_template_vars(config: dict[str, Any]) -> dict[str, str]:
         "status_path": config.get("memory", {}).get("status_path", ""),
         "snapshot_path": config.get("memory", {}).get("snapshot_path", ""),
         "sync_batch": str(config.get("ov", {}).get("sync_batch", 50)),
+        "promote_enabled": str(config.get("memory", {}).get("promote_enabled", True)),
+        "promote_threshold": str(config.get("memory", {}).get("promote_threshold", 3)),
+        "promote_min_length": str(config.get("memory", {}).get("promote_min_length", 50)),
+        "promote_cooldown_days": str(config.get("memory", {}).get("promote_cooldown_days", 7)),
+        "max_cache_mb": str(config.get("memory", {}).get("max_cache_mb", 500)),
+        "max_inject_native": str(config.get("memory", {}).get("max_inject_native", 3)),
     }
 
 
@@ -237,6 +257,15 @@ class HookInstaller:
         # 6. Register hooks in Claude Code settings
         self._register_hooks(hooks_dir, config)
 
+        # 7. Write initial core memories if native memory dir is empty
+        memory_path = config.get("memory", {}).get("memory_path", "")
+        if memory_path:
+            mem_dir = Path(os.path.expanduser(memory_path))
+            mem_dir.mkdir(parents=True, exist_ok=True)
+            existing = list(mem_dir.glob("*.md"))
+            if not existing:
+                self._write_initial_memories(mem_dir, config)
+
         return {
             "config_dir": str(config_dir),
             "data_dir": str(data_dir),
@@ -246,6 +275,47 @@ class HookInstaller:
             "ov_enabled": config["ov"]["enabled"],
             "ov_url": config["ov"]["url"],
         }
+
+    def _write_initial_memories(self, mem_dir: Path, config: dict[str, Any]) -> None:
+        """Write initial core memory files when native memory dir is empty."""
+        agent_name = config.get("agent", {}).get("name", "assistant")
+        memories = {
+            "cc-star-memory-system.md": (
+                "# cc-star 记忆系统\n\n"
+                "## 架构\n"
+                "- **L1 工作记忆**：当前会话内容，不持久化\n"
+                "- **L2 短期记忆**：cache.db SQLite+FTS5，自动检索\n"
+                "- **L3 核心记忆**：本目录 markdown 文件，每轮自动加载\n\n"
+                "## 检索链路\n"
+                "用户输入 → FTS5 全文检索(cache.db) + 核心记忆关键词匹配 + OpenViking 语义检索\n"
+                "→ RRF 融合排序 → 注入额外上下文(additionalContext)\n\n"
+                "## 压缩保护\n"
+                "PreCompact/PostCompact 自动保存恢复 STATUS.md / 核心记忆 / 快照\n\n"
+                "## 记忆晋升\n"
+                "高频/重要对话内容自动从 L2 晋升到 L3（本目录）\n\n"
+                f"_初始化时间: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}_\n"
+            ),
+            "agent-identity.md": (
+                "# Agent Identity\n\n"
+                f"## 名称\n{agent_name}\n\n"
+                "## 角色\n"
+                "cc-star 记忆系统驱动的 Claude Code Agent\n\n"
+                "## 能力\n"
+                "- 语义记忆检索（FTS5 + 关键词 + OpenViking）\n"
+                "- 会话自动存储\n"
+                "- 上下文压缩保护\n"
+                "- 记忆自动晋升\n\n"
+                "## 协作\n"
+                "- 团队记忆通过 OpenViking 共享\n"
+                "- 核心知识固化到本地 markdown\n"
+            ),
+        }
+
+        for name, content in memories.items():
+            fpath = mem_dir / name
+            if not fpath.is_file():
+                fpath.write_text(content, encoding="utf-8")
+                sys.stderr.write(f"[cc-star] initial memory: {name}\n")
 
     def uninstall(self) -> bool:
         """Remove cc-star hook entries from Claude Code settings."""

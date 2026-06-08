@@ -2,12 +2,14 @@
 """
 UserPromptSubmit Hook — cc-star memory retrieval injection.
 
-Reads user prompt -> cache.db FTS5 + optional OV semantic search -> additionalContext.
+Reads user prompt → cache.db FTS5 + native memory + OpenViking → additionalContext.
+Three sources fused via RRF merge (config cascade: env var → config.yaml → baked).
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -17,11 +19,23 @@ from cc_star.cache.schema import ensure_schema
 from cc_star.cache.traces import TraceRepository
 from cc_star.retrieval.ranker import rrf_merge
 
-CACHE_PATH = os.path.expanduser("$cache_path")
-OV_URL = os.environ.get("CC_STAR_OV_URL", "$ov_url")
+# ── Runtime config ──
+try:
+    from cc_star.config import ConfigManager
+    _CFG = ConfigManager().load()
+    _GET = lambda k, d=None: _CFG.get(k) or d
+except Exception:
+    _GET = lambda k, d=None: d
+
+CACHE_PATH = os.path.expanduser(os.environ.get("CC_STAR_CACHE_PATH", "$cache_path"))
+OV_URL = os.environ.get("CC_STAR_OV_URL", _GET("ov.url", "$ov_url"))
 OV_ENABLED = os.environ.get("CC_STAR_OV_ENABLED", "$ov_enabled") in ("1", "true", "True")
+NATIVE_MEMORY_PATH = os.path.expanduser(
+    os.environ.get("CC_STAR_MEMORY_PATH", _GET("memory.memory_path", "$memory_path"))
+)
 MIN_WORDS = 3
-MAX_MEMORIES = $max_inject
+MAX_MEMORIES = int(os.environ.get("CC_STAR_MAX_INJECT", _GET("memory.max_inject", "$max_inject")))
+MAX_INJECT_NATIVE = int(os.environ.get("CC_STAR_MAX_INJECT_NATIVE", _GET("memory.max_inject_native", "3")))
 
 
 def sanitize_query(text: str) -> str:
@@ -42,9 +56,25 @@ def count_tokens(text: str) -> int:
     text = text.strip()
     if not text:
         return 0
-    cjk = sum(1 for c in text if '\u4e00' <= c <= '\u9fff' or '\u3400' <= c <= '\u4dbf')
-    non_cjk = len([w for w in text.replace(''.join(c for c in text if '\u4e00' <= c <= '\u9fff' or '\u3400' <= c <= '\u4dbf'), ' ').split() if w])
+    cjk = sum(1 for c in text if '一' <= c <= '鿿' or '㐀' <= c <= '䶿')
+    non_cjk = len([w for w in text.replace(''.join(c for c in text if '一' <= c <= '鿿' or '㐀' <= c <= '䶿'), ' ').split() if w])
     return cjk + non_cjk
+
+
+def _tokenize(text: str) -> set[str]:
+    """Tokenize text into lowercase keywords for native memory matching."""
+    text = text.lower()
+    # Extract CJK bigrams
+    cjk_chars = re.findall(r'[一-鿿㐀-䶿]', text)
+    bigrams = set()
+    for i in range(len(cjk_chars) - 1):
+        bigrams.add(cjk_chars[i] + cjk_chars[i + 1])
+    # English words
+    words = set(re.findall(r'[a-z0-9_\-]{3,}', text))
+    return bigrams | words
+
+
+# ── Source 1: Local cache.db FTS5 ──
 
 
 def search_local(repo: TraceRepository, query: str, limit: int = 8) -> list[dict]:
@@ -67,6 +97,56 @@ def search_local(repo: TraceRepository, query: str, limit: int = 8) -> list[dict
     except Exception as e:
         print(f"[inject] FTS5 search error: {e}", file=sys.stderr)
     return results
+
+
+# ── Source 2: Native memory (~/.claude/memory/*.md) ──
+
+
+def search_native(query: str, limit: int = 5) -> list[dict]:
+    """Search native memory .md files by keyword overlap."""
+    if not NATIVE_MEMORY_PATH or not Path(NATIVE_MEMORY_PATH).is_dir():
+        return []
+    query_tokens = _tokenize(query)
+    if not query_tokens:
+        return []
+
+    results = []
+    for fpath in sorted(Path(NATIVE_MEMORY_PATH).glob("*.md")):
+        try:
+            text = fpath.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        file_tokens = _tokenize(text)
+        overlap = query_tokens & file_tokens
+        if not overlap:
+            continue
+        score = len(overlap) / max(len(query_tokens), 1)
+        # Extract title from first heading or filename
+        title = ""
+        for line in text.split("\n"):
+            if line.startswith("# "):
+                title = line.lstrip("# ").strip()
+                break
+        if not title:
+            title = fpath.stem
+
+        results.append({
+            "id": f"native:{fpath.name}",
+            "session_id": fpath.stem,
+            "user_content": f"【核心记忆】{title}\n\n{text[:300]}",
+            "assistant_content": "",
+            "reward": score,
+            "tags": ["native", "core"],
+            "created_at": "",
+            "source": "native",
+            "score": score,
+        })
+
+    results.sort(key=lambda r: r["score"], reverse=True)
+    return results[:limit]
+
+
+# ── Source 3: OpenViking ──
 
 
 def search_ov(query: str, limit: int = 8) -> list[dict]:
@@ -97,7 +177,8 @@ def search_ov(query: str, limit: int = 8) -> list[dict]:
 
 def format_memory_block(m: dict) -> str:
     """Format a single memory as text block for additionalContext."""
-    lines = [f"[Past Memory] session={m['session_id'][:12]} | {m.get('created_at', '')[:10]}"]
+    src_label = {"local": "对话记忆", "native": "核心记忆", "ov": "共享记忆"}.get(m["source"], m["source"])
+    lines = [f"[{src_label}] session={m['session_id'][:12]} | {m.get('created_at', '')[:10]}"]
     if m.get("tags"):
         lines.append(f"  tags: {', '.join(m['tags'][:3])}")
     lines.append(f"  user: {m['user_content'][:200]}")
@@ -127,14 +208,15 @@ def main() -> None:
         print(f"[inject] cache init error: {e}", file=sys.stderr)
         sys.exit(0)
 
-    # Dual-channel search
+    # Tri-channel search
     t0 = time.time()
     local_results = search_local(repo, prompt, limit=8)
+    native_results = search_native(prompt, limit=MAX_INJECT_NATIVE)
     ov_results = search_ov(prompt, limit=8)
     elapsed = time.time() - t0
 
     # Merge via RRF
-    merged = rrf_merge([local_results, ov_results], k=60)
+    merged = rrf_merge([local_results, native_results, ov_results], k=60)
     merged = merged[:MAX_MEMORIES]
 
     if not merged:
@@ -151,13 +233,14 @@ def main() -> None:
 
     total = len(merged)
     local_n = sum(1 for m in merged if m["source"] == "local")
+    native_n = sum(1 for m in merged if m["source"] == "native")
     ov_n = sum(1 for m in merged if m["source"] == "ov")
 
     output = {
         "additionalContext": context,
         "systemMessage": (
             f"{total} memories injected "
-            f"(FTS5:{local_n} OV:{ov_n} {elapsed:.1f}s)"
+            f"(FTS5:{local_n} 核心:{native_n} OV:{ov_n} {elapsed:.1f}s)"
         ),
     }
 

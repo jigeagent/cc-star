@@ -4,6 +4,8 @@ PreCompact / PostCompact Hook — cc-star context compression protection.
 
 Save: saves STATUS.md / MEMORY.md / Snapshot -> tmp JSON before compression.
 Restore: restores from tmp JSON -> additionalContext after compression.
+
+Config cascade: env var > config.yaml > template-baked default.
 """
 from __future__ import annotations
 
@@ -12,17 +14,38 @@ import os
 import sys
 from pathlib import Path
 
-DATA_DIR = Path(os.path.expanduser("$data_dir"))
+# ── Runtime config (cascade: env var → config.yaml → baked fallback) ──
+try:
+    from cc_star.config import ConfigManager
+    _CFG = ConfigManager().load()
+    _GET = lambda k, d=None: _CFG.get(k) or d  # noqa: E731
+except Exception:
+    _GET = lambda k, d=None: d                  # standalone fallback
+
+
+def _resolve(key: str, env: str, baked: str) -> str:
+    """Resolve a config value: env var → config.yaml → baked."""
+    return os.environ.get(env) or _GET(key) or baked
+
+
+DATA_DIR = Path(os.path.expanduser(
+    _resolve("storage.path", "CC_STAR_DATA_DIR", "$data_dir")
+))
 TMP_FILE = DATA_DIR / "compact_state.json"
 
-# Memory files — configured paths with fallback auto-detect
-MEMORY_PATH = os.path.expanduser("$memory_path") if "$memory_path" else ""
+MEMORY_PATH = os.path.expanduser(
+    _resolve("memory.memory_path", "CC_STAR_MEMORY_PATH", "$memory_path")
+)
 MEMORY_FILE = Path(MEMORY_PATH) if MEMORY_PATH else None
 
-STATUS_PATH = os.path.expanduser("$status_path") if "$status_path" else ""
+STATUS_PATH = os.path.expanduser(
+    _resolve("memory.status_path", "CC_STAR_STATUS_PATH", "$status_path")
+)
 STATUS_FILE = Path(STATUS_PATH) if STATUS_PATH else Path(os.path.expanduser("~/STATUS.md"))
 
-SNAPSHOT_PATH = os.path.expanduser("$snapshot_path") if "$snapshot_path" else ""
+SNAPSHOT_PATH = os.path.expanduser(
+    _resolve("memory.snapshot_path", "CC_STAR_SNAPSHOT_PATH", "$snapshot_path")
+)
 SNAPSHOT_FILE = Path(SNAPSHOT_PATH) if SNAPSHOT_PATH else Path(os.path.expanduser("~/_openviking_snapshot.md"))
 
 
@@ -30,7 +53,6 @@ def find_memory_file() -> Path | None:
     """Auto-detect MEMORY.md if memory_path not explicitly configured."""
     if MEMORY_FILE is not None:
         return MEMORY_FILE if MEMORY_FILE.is_file() else None
-    # Glob for project memory directories
     projects_dir = Path(os.path.expanduser("~/.claude/projects"))
     if not projects_dir.is_dir():
         return None

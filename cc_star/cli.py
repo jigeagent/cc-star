@@ -46,6 +46,10 @@ def cmd_init(args: argparse.Namespace) -> None:
             print(f"Already initialized (use --force to redo)")
         sys.exit(0)
 
+    # If force, mark as ready to reinitialize (don't exit)
+    if config_dir.is_dir() and args.force:
+        print(f"Reinitializing cc-star at {config_dir}...")
+
     installer = HookInstaller(cfg_mgr)
     result = installer.install(
         agent_name=args.agent_name,
@@ -236,6 +240,13 @@ def cmd_uninstall(args: argparse.Namespace) -> None:
         print("No cc-star hooks found in settings.")
 
 
+def cmd_promote(args: argparse.Namespace) -> None:
+    """Run memory maintenance: cache limit, dedup, hot promote."""
+    from cc_star.promote import run_maintenance
+    results = run_maintenance(dry_run=args.dry_run or False)
+    json.dump(results, sys.stdout, indent=2, ensure_ascii=False)
+
+
 def _check_ov_health(url: str) -> bool:
     """Check OpenViking connectivity."""
     if not url:
@@ -284,6 +295,11 @@ def main() -> None:
     # uninstall
     sub.add_parser("uninstall", help="Remove cc-star hooks from Claude Code settings")
 
+    # promote
+    promote_p = sub.add_parser("promote", help="Run memory maintenance (cache limit, dedup, hot promote)")
+    promote_p.add_argument("--dry-run", "-n", action="store_true",
+                           help="Preview without making changes")
+
     args = parser.parse_args()
 
     # Dispatch
@@ -297,6 +313,8 @@ def main() -> None:
         cmd_config(args)
     elif args.command == "uninstall":
         cmd_uninstall(args)
+    elif args.command == "promote":
+        cmd_promote(args)
 
 
 if __name__ == "__main__":
