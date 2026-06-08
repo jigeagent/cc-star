@@ -39,16 +39,13 @@ def cmd_init(args: argparse.Namespace) -> None:
     config_dir = cfg_mgr.config_path.parent
 
     if config_dir.is_dir() and not args.force:
-        if not args.non_interactive:
-            print(f"cc-star already initialized at {config_dir}")
-            print("Use --force to reinitialize")
-        else:
-            print(f"Already initialized (use --force to redo)")
+        print(f"  ⚠️  cc-star 已初始化于 {config_dir}")
+        print(f"  使用 --force 可重新初始化")
+        print(f"  使用 cc-star doctor 可做运行检查")
         sys.exit(0)
 
-    # If force, mark as ready to reinitialize (don't exit)
     if config_dir.is_dir() and args.force:
-        print(f"Reinitializing cc-star at {config_dir}...")
+        print(f"  🔄 重新初始化 cc-star ...")
 
     installer = HookInstaller(cfg_mgr)
     result = installer.install(
@@ -58,17 +55,86 @@ def cmd_init(args: argparse.Namespace) -> None:
         force=args.force,
     )
 
-    print(f"cc-star v{__version__} initialized successfully!")
-    print(f"  Config:  {result['config_dir']}/config.yaml")
-    print(f"  Data:    {result['cache_path']}")
-    print(f"  Hooks:   {result['hooks_dir']}")
-    print(f"  Agent:   {result['agent_name']}")
-    print(f"  OV:      {'enabled (' + result['ov_url'] + ')' if result['ov_enabled'] else 'disabled'}")
+    # ── 输出 ──
     print()
-    print("Next steps:")
-    print("  1. Start a new Claude Code session")
-    print("  2. Run 'cc-star status' to verify")
-    print("  3. Run 'cc-star search \"your query\"' to test")
+    print(f"  ✅ cc-star v{__version__}  初始化成功")
+    print(f"  ───────────────────────────────────")
+    print(f"  配置目录  {result['config_dir']}")
+    print(f"  数据文件  {result['cache_path']}")
+    print(f"  Hook 脚本 {result['hooks_dir']}")
+    print(f"  当前身份  {result['agent_name']}")
+    ov_status = f"已连接 {result['ov_url']}" if result['ov_enabled'] else "未配置"
+    print(f"  OpenViking {ov_status}")
+    print()
+
+    # ── 自动检测 ──
+    checks = []
+    # Python version
+    pyver = f"{sys.version_info.major}.{sys.version_info.minor}"
+    checks.append(f"  ✓ Python {pyver}")
+
+    # Config file
+    if (config_dir / "config.yaml").is_file():
+        checks.append(f"  ✓ 配置文件已写入")
+
+    # Hooks in settings.json
+    settings_path = Path.home() / ".claude" / "settings.json"
+    if settings_path.is_file():
+        try:
+            import json
+            s = json.loads(settings_path.read_text(encoding="utf-8"))
+            hook_count = sum(len(v) for v in (s.get("hooks", {}) or {}).values())
+            checks.append(f"  ✓ Claude Code hooks 已注册 ({hook_count} 事件)")
+        except Exception:
+            pass
+
+    # OpenViking connectivity
+    ov_url = result.get("ov_url", "")
+    if ov_url:
+        try:
+            import httpx
+            r = httpx.get(f"{ov_url}/health", timeout=2.0)
+            if r.status_code == 200:
+                checks.append(f"  ✓ OpenViking 在线 ({ov_url})")
+            else:
+                checks.append(f"  ⚠️ OpenViking 返回异常状态")
+        except Exception:
+            checks.append(f"  ⚠️ OpenViking 不可达 ({ov_url})")
+
+    # Native memory
+    mem_path = cfg_mgr.get("memory.memory_path")
+    if mem_path:
+        mem_dir = Path(os.path.expanduser(mem_path))
+        if mem_dir.is_dir():
+            count = len(list(mem_dir.glob("*.md")))
+            checks.append(f"  ✓ 原生记忆目录就绪 ({count} 份文件)")
+
+    # Cache DB
+    cache_path = cfg_mgr.data_dir / "cache.db"
+    if cache_path.is_file():
+        size_mb = cache_path.stat().st_size / (1024 * 1024)
+        checks.append(f"  ✓ 记忆数据库 {size_mb:.0f}MB ({result.get('trace_count', '?')} 条)")
+
+    print(f"  ── 环境检测 ──")
+    for c in checks:
+        print(f"  {c}")
+    print()
+
+    # ── 下一步 ──
+    print(f"  ── 下一步 ──")
+    print(f"  1. 启动新的 Claude Code 会话（hooks 将在新会话生效）")
+    print(f"  2. 运行 cc-star doctor    全面自检")
+    print(f"  3. 运行 cc-star status    查看运行状态")
+    print(f"  4. 运行 cc-star promote   记忆维护（建议每周一次）")
+    print(f"  5. 运行 cc-star search    测试记忆检索")
+    print()
+
+    # ── 首次使用提示 ──
+    print(f"  💡 cc-star v0.3 三核能力")
+    print(f"     🔍 三源检索  对话 + 核心记忆 + 团队共享 → RRF 融合")
+    print(f"     ⬆  自动晋升  高频内容自动写入原生记忆")
+    print(f"     🧹 生命周期   自动回收 + 去重 + 热扫")
+    print()
 
 
 def cmd_status(args: argparse.Namespace) -> None:
@@ -247,6 +313,119 @@ def cmd_promote(args: argparse.Namespace) -> None:
     json.dump(results, sys.stdout, indent=2, ensure_ascii=False)
 
 
+def cmd_doctor(args: argparse.Namespace) -> None:
+    """全面自检：环境 + 配置 + hook + DB + OV 一次查清."""
+    print()
+    print(f"  🏥 cc-star doctor — 全面自检")
+    print(f"  ───────────────────────────────────")
+    print()
+
+    cfg_mgr = _get_config_manager()
+    config_dir = cfg_mgr.config_path.parent
+    data_dir = cfg_mgr.data_dir
+    all_ok = True
+
+    # 1. 配置
+    if (config_dir / "config.yaml").is_file():
+        print(f"  ✅ 配置文件  {config_dir / 'config.yaml'}")
+    else:
+        print(f"  ❌ 配置文件缺失 — 请运行 cc-star init")
+        all_ok = False
+
+    # 2. 数据库
+    cache_path = data_dir / "cache.db"
+    if cache_path.is_file():
+        size_mb = cache_path.stat().st_size / (1024 * 1024)
+        import sqlite3
+        try:
+            conn = sqlite3.connect(str(cache_path))
+            count = conn.execute("SELECT COUNT(*) FROM traces").fetchone()[0]
+            conn.close()
+            print(f"  ✅ 记忆数据库  {cache_path} ({size_mb:.0f}MB, {count} 条)")
+        except Exception as e:
+            print(f"  ❌ 数据库异常 — {e}")
+            all_ok = False
+    else:
+        print(f"  ⚠️ 数据库文件不存在（新装机正常，使用后会自动创建）")
+
+    # 3. Hook 脚本
+    hooks_dir = config_dir / "hooks"
+    expected = ["session_start.py", "inject.py", "store.py", "summary.py", "compact.py"]
+    if hooks_dir.is_dir():
+        present = [p.name for p in hooks_dir.glob("*.py")]
+        missing = [f for f in expected if f not in present]
+        if not missing:
+            print(f"  ✅ Hook 脚本  {len(present)}/5 齐全")
+        else:
+            print(f"  ⚠️ Hook 脚本缺失 — {missing}")
+            all_ok = False
+    else:
+        print(f"  ❌ Hook 目录缺失 — 请运行 cc-star init --force")
+        all_ok = False
+
+    # 4. Claude Code settings hooks
+    settings_path = Path.home() / ".claude" / "settings.json"
+    if settings_path.is_file():
+        try:
+            import json
+            s = json.loads(settings_path.read_text(encoding="utf-8"))
+            hooks = s.get("hooks", {})
+            cc_events = [e for e in hooks if hooks[e]]
+            print(f"  ✅ Claude Code {len(cc_events)}/{len(hooks)} 事件已注册 hook")
+        except Exception as e:
+            print(f"  ⚠️ 读取 settings.json 失败 — {e}")
+    else:
+        print(f"  ⚠️ Claude Code settings.json 不存在（未安装 Claude Code?）")
+
+    # 5. 原生记忆
+    mem_path = cfg_mgr.get("memory.memory_path")
+    if mem_path:
+        mem_dir = Path(os.path.expanduser(mem_path))
+        if mem_dir.is_dir():
+            count = len(list(mem_dir.glob("*.md")))
+            print(f"  ✅ 原生记忆  {mem_dir} ({count} 份文件)")
+        else:
+            print(f"  ⚠️ 原生记忆目录不存在 — 将自动创建")
+    else:
+        print(f"  ⚠️ 原生记忆未配置 — 设置 memory.memory_path 可启用")
+
+    # 6. 快照 / STATUS
+    for key, label in [("memory.status_path", "STATUS"), ("memory.snapshot_path", "快照")]:
+        path = cfg_mgr.get(key)
+        if path:
+            p = Path(os.path.expanduser(path))
+            if p.is_file():
+                print(f"  ✅ {label}文件  {p}")
+            elif p.exists():
+                print(f"  ✅ {label}路径  {p}")
+            else:
+                print(f"  ⚠️ {label}路径不存在 — {p}")
+
+    # 7. OpenViking
+    ov_url = cfg_mgr.get("ov.url")
+    ov_enabled = cfg_mgr.get("ov.enabled")
+    if ov_enabled and ov_url:
+        try:
+            import httpx
+            r = httpx.get(f"{ov_url}/health", timeout=2.0)
+            if r.status_code == 200:
+                print(f"  ✅ OpenViking 在线  {ov_url}")
+            else:
+                print(f"  ⚠️ OpenViking 异常状态 ({r.status_code})")
+        except Exception:
+            print(f"  ❌ OpenViking 不可达  {ov_url}")
+            all_ok = False
+    else:
+        print(f"  ⚪ OpenViking 未配置（可选）")
+
+    print()
+    if all_ok:
+        print(f"  ✅ 全部就绪！cc-star v{__version__} 运行正常")
+    else:
+        print(f"  ⚠️ 存在需要修复的项目，请按上述提示操作")
+    print()
+
+
 def _check_ov_health(url: str) -> bool:
     """Check OpenViking connectivity."""
     if not url:
@@ -300,6 +479,9 @@ def main() -> None:
     promote_p.add_argument("--dry-run", "-n", action="store_true",
                            help="Preview without making changes")
 
+    # doctor
+    sub.add_parser("doctor", help="全面自检：环境 + 配置 + hook + DB + OV 一次查清")
+
     args = parser.parse_args()
 
     # Dispatch
@@ -315,6 +497,8 @@ def main() -> None:
         cmd_uninstall(args)
     elif args.command == "promote":
         cmd_promote(args)
+    elif args.command == "doctor":
+        cmd_doctor(args)
 
 
 if __name__ == "__main__":

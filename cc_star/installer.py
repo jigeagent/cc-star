@@ -266,6 +266,15 @@ class HookInstaller:
             if not existing:
                 self._write_initial_memories(mem_dir, config)
 
+        # 8. Count existing traces
+        trace_count = 0
+        try:
+            from cc_star.cache.traces import TraceRepository
+            tr = TraceRepository(cache)
+            trace_count = tr.count()
+        except Exception:
+            pass
+
         return {
             "config_dir": str(config_dir),
             "data_dir": str(data_dir),
@@ -274,6 +283,7 @@ class HookInstaller:
             "agent_name": config["agent"]["name"],
             "ov_enabled": config["ov"]["enabled"],
             "ov_url": config["ov"]["url"],
+            "trace_count": trace_count,
         }
 
     def _write_initial_memories(self, mem_dir: Path, config: dict[str, Any]) -> None:

@@ -29,9 +29,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "snapshot_path": "",
         "promote_enabled": True,
         "promote_threshold": 3,
-        "promote_min_length": 50,
+        "promote_min_length": 150,
         "promote_cooldown_days": 7,
-        "max_cache_mb": 500,
+        "max_cache_mb": 1000,
         "max_inject_native": 3,
     },
     "ov": {

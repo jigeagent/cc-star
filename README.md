@@ -3,78 +3,131 @@
 **不是日记本，是认知引擎。**
 **Not a notebook. A cognition engine.**
 
-Claude Code's native memory is a notebook — it writes down what you did.
-cc-star is an engine — it learns *why* it worked and turns that into reusable strategy.
-
-Stop storing. Start growing.
+Claude Code 的原生记忆是便利贴——你写什么它记什么。
+cc-star 是数字大脑——它理解*为什么*重要，让记忆自我进化。
 
 ```
 pip install cc-star && cc-star init
-# 30 seconds → your Claude Code starts learning from every conversation
+# 30 秒 → 你的 Claude Code 开始从每次对话中学习
 ```
 
-Built on a **L1→L2→L3 cognitive pipeline**: raw conversations → rewarded patterns → crystallized skills. No other memory system for Claude Code does this.
+---
 
-## Features
+## 🎯 What's New in v0.3 — 类脑记忆系统
 
-- **Persistent storage** — every conversation turn saved to local SQLite database
-- **Full-text search** — FTS5-powered memory retrieval across all past conversations
-- **Context injection** — automatically injects relevant past memories before each prompt
-- **Cognitive pipeline** — turns raw conversation history into structured knowledge:
-  - **L1 Capture** — auto-collect every turn with metadata (tags, agent name, timestamps)
-  - **Reward Engine** — apply outcome signals (success/failure/correction), backpropagate temporal discounts
-  - **L2 Policy Induction** — extract reusable patterns from successful outcomes, build candidate pool with confidence scoring
-  - **L3 Skill Crystallization** — promote high-frequency patterns into callable skills with test cases and trigger conditions
-  - **World Model** — cluster concepts from memory, extract entity-relation triples for associative retrieval
-- **Compression protection** — preserves critical context (MEMORY.md, STATUS.md) across Claude Code compaction events
-- **Optional OpenViking sync** — cold storage with semantic search
-- **Built-in viewer** — embedded SPA web UI to browse traces, policies, skills, concepts
-- **Zero Claude Code config** — `cc-star init` handles all hook registration
+### 🔍 三源合一检索（Tri-Source Retrieval）
 
-> **Why cc-star stands out:** Most Claude Code memory systems stop at "store + search." cc-star goes further — it *thinks* about what it stores. The cognitive pipeline automatically distills raw conversations into policies, skills, and conceptual knowledge, turning your AI's experience into an ever-improving knowledge base. No other open-source memory system for Claude Code offers this capability.
+之前只搜 cache.db + OpenViking，现在原生记忆也纳入检索。
+
+```
+用户输入 → FTS5(cache.db 对话记忆) + 关键词(原生核心记忆) + 语义(OpenViking 团队共享)
+         → RRF 三源融合排序 → 注入额外上下文
+```
+
+不遗漏任何维度的记忆。
+
+### ⬆️ 记忆自动晋升 L2→L3（Auto Promotion）
+
+对话存储后自动判断：高频/重要内容 → 渲染 markdown → 写入 `~/.claude/memory/`。
+下次会话 Claude Code 自动加载，完全无需手动管理。
+
+触发条件：含架构/决策/协议/方案等关键词 + 内容长度 > 150 字 + 7 天冷却期。
+
+### 🧹 记忆生命周期管理（Lifecycle）
+
+| 机制 | 行为 | 阈值 |
+|------|------|------|
+| cache.db 超限回收 | 删除最旧 traces | > 1GB 触发，回收至 70% |
+| 原生记忆去重 | 内容哈希比对 → 重命名 .bak | 自动 |
+| 热记忆扫描 | 综合评分（关键词密度 + 长度）→ 晋升 L3 | 每周建议一次 |
+
+### ⚡ 配置动态化（Dynamic Config）
+
+改 `~/.cc-star/config.yaml` 即时生效，无需 re-init。
+支持环境变量覆盖（`CC_STAR_*`）。
+
+---
 
 ## Quick Start
 
 ```bash
-# Install
+# 安装
 pip install cc-star
 
-# Initialize (30 seconds)
+# 初始化（30 秒）
 cc-star init
 
-# Start a new Claude Code session — memories will be automatically
-# stored, searched, and injected
+# 全面自检
+cc-star doctor
 
-# Search your memory
-cc-star search "how did we fix the auth bug?"
+# 搜索记忆
+cc-star search "之前那个架构方案是怎么设计的"
 
-# Check status
+# 记忆维护（建议每周一次）
+cc-star promote
+
+# 查看状态
 cc-star status
 ```
 
-## Windows Users
-
-cc-star works on Windows. If you run into issues, see the **[Windows Installation Guide](docs/windows-install.md)** for known pitfalls and fixes.
-
-**Quick tips for Windows:**
-- ✅ `cc-star init` (v0.2.4+) handles path formatting automatically
-- ⚠️ Put API keys in **system environment variables**, not `settings.json` `env` (Claude Code Windows bug)
-- ⚠️ If `cc-star init` was run on an older version, check hook paths in `settings.json` use forward slashes `/`
-- ⚠️ **Subagent spawning**: ensure `claude.exe` is in Windows native PATH for multi-agent / Workflow features (see [guide](docs/windows-install.md#-p1--claude-not-found-by-nodejs-spawn-subagent-enoent))
-- ✅ `claude doctor` showing ✗ for Remote Control is normal in API Key mode
-
-Run the [quick diagnosis script](docs/windows-install.md#quick-diagnosis) if something feels off.
+---
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `cc-star init` | Initialize the memory system |
-| `cc-star status` | Show memory system status |
-| `cc-star search <query>` | Search local memory |
-| `cc-star config` | View all configuration |
-| `cc-star config <key> <value>` | Update configuration |
-| `cc-star uninstall` | Remove hooks from Claude Code settings |
+| `cc-star init` | 初始化记忆系统（中文引导 + 自检） |
+| `cc-star doctor` | 全面自检（配置/hook/DB/OV 一次查清） |
+| `cc-star status` | 查看运行状态 |
+| `cc-star search <query>` | 搜索记忆 |
+| `cc-star promote` | 记忆维护（cache 回收 + 去重 + 热晋升） |
+| `cc-star config` | 查看配置 |
+| `cc-star config <key> <value>` | 修改配置 |
+| `cc-star uninstall` | 移除 hook |
+
+---
+
+## Architecture v0.3
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                        cc-star v0.3                           │
+│  ┌──────────────────────────────────────────────────────┐    │
+│  │                    Tril-Source Retrieval                │    │
+│  │  ┌─────────────────┐  ┌──────────────┐  ┌──────────┐  │    │
+│  │  │  cache.db FTS5  │  │  原生记忆     │  │OpenViking│  │    │
+│  │  │  L2 短期对话记忆 │  │  L3 核心知识   │  │ 团队共享  │  │    │
+│  │  └────────┬────────┘  └──────┬───────┘  └─────┬────┘  │    │
+│  │           └──────────────────┼─────────────────┘       │    │
+│  │                      ┌──────▼───────┐                  │    │
+│  │                      │  RRF Merge   │                  │    │
+│  │                      │  融合排序     │                  │    │
+│  │                      └──────┬───────┘                  │    │
+│  │                             ▼                          │    │
+│  │                    additionalContext                    │    │
+│  └──────────────────────────────────────────────────────┘    │
+│                                                              │
+│  ┌──────────┐  ┌────────────────────────────────────────┐   │
+│  │  5 Hooks  │  │  Memory Lifecycle                      │   │
+│  │  Session  │  │  ┌─────────┐  ┌──────────┐  ┌──────┐  │   │
+│  │  Start    │  │  │store.py │→│promote.py│→│ dedup │  │   │
+│  │  Inject   │  │  │ 存储对话 │  │ 晋升+回收  │  │ 去重  │  │   │
+│  │  Store    │  │  └─────────┘  └──────────┘  └──────┘  │   │
+│  │  Summary  │  └────────────────────────────────────────┘   │
+│  │  Compact  │                                              │
+│  └──────────┘                                              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Hook Flow
+
+- **SessionStart** — 环境自检 + 上次会话摘要
+- **UserPromptSubmit (inject)** — **三源合一检索**：FTS5 + 原生记忆关键词 + OV 语义 → RRF 融合
+- **Stop (store)** — 存储对话 + **自动判断是否晋升到原生记忆**
+- **SessionEnd (summary)** — 会话摘要 + OpenViking 批量同步
+- **PreCompact/PostCompact (compact)** — 压缩保护（配置动态加载）
+
+---
 
 ## Configuration
 
@@ -87,7 +140,15 @@ agent:
 storage:
   path: ~/.cc-star/data
 memory:
-  max_inject: 5
+  max_inject: 5           # 每次注入最多 5 条对话记忆
+  max_inject_native: 3     # 每次注入最多 3 条核心记忆
+  memory_path: ""          # 原生记忆目录（设 ~/.claude/memory 启用三源检索）
+  status_path: ""          # STATUS.md 路径（用于压缩保护）
+  snapshot_path: ""        # OV 快照路径（用于压缩保护）
+  promote_enabled: true    # 是否启用记忆晋升
+  promote_min_length: 150  # 晋升最小内容长度
+  promote_cooldown_days: 7 # 晋升冷却期
+  max_cache_mb: 1000       # cache.db 上限（超限自动回收）
 ov:
   enabled: false
   url: ""
@@ -101,69 +162,27 @@ hooks:
   timeout_compact_restore: 10
 ```
 
-## Architecture
+---
 
-```
-┌─────────────────────────────────────────────────────┐
-│                    cc-star                            │
-│  ┌──────────┐  ┌─────────────────────────────────┐   │
-│  │  CLI      │  │  5 Hook Scripts (auto-run)       │   │
-│  │  init     │  │  ├─ SessionStart  → last session │   │
-│  │  status   │  │  ├─ Inject        → FTS5+OV检索   │   │
-│  │  search   │  │  ├─ Store         → 存储本轮对话   │   │
-│  │  config   │  │  ├─ Summary       → 摘要+批量同步   │   │
-│  │  viewer   │  │  └─ Compact       → 压缩保护       │   │
-│  └──────────┘  └────────┬───────────┬───────────┘   │
-│                          │           │                 │
-│              ┌───────────▼───────────▼────┐            │
-│              │    Cognitive Pipeline       │            │
-│              │  L1 Capture → Reward → L2   │            │
-│              │  Policy Induction → L3 Skill │            │
-│              │  Crystallization → World     │            │
-│              │  Model (concepts + triples)  │            │
-│              └───────────┬─────────────────┘            │
-│                          │                              │
-│              ┌───────────▼──────────────────┐            │
-│              │     Storage Layer              │            │
-│              │  ┌─────────┐  ┌────────────┐   │            │
-│              │  │ SQLite  │  │ OpenViking  │   │            │
-│              │  │ + FTS5  │  │ (optional)  │   │            │
-│              │  │ 热存     │  │ 冷存·语义检索 │   │            │
-│              │  └─────────┘  └────────────┘   │            │
-│              └─────────────────────────────────┘            │
-└─────────────────────────────────────────────────────────────┘
-```
+## Windows Users
 
-### Hook Flow
+See the **[Windows Installation Guide](docs/windows-install.md)** for known pitfalls.
 
-- **SessionStart** — checks OV health, shows last session summary
-- **UserPromptSubmit (inject)** — FTS5 + optional OV semantic search, RRF merge, injects as `additionalContext`
-- **Stop (store)** — reads transcript, extracts last turn, writes to cache.db + L1 Capture
-- **SessionEnd (summary)** — extracts session summary, batch syncs to OV
-- **PreCompact/PostCompact (compact)** — preserves MEMORY.md / STATUS.md / OV snapshot across compression
+---
 
-### Cognitive Pipeline Flow
+## 🧠 Why cc-star?
 
-```
-Raw Turn → L1 Capture → Reward Signal → L2 Policy Induction → L3 Skill Crystallization
-                                         ↓
-                                    World Model
-                              (concept clustering +
-                               entity-relation triples)
-```
+| 对比项 | Claude Code 原生记忆 | cc-star v0.2 | cc-star v0.3 🆕 |
+|--------|-------------------|-------------|----------------|
+| 检索方式 | 全量加载内存 | FTS5 + OV | **FTS5 + 原生 + OV 三源** |
+| 对话存储 | ❌ 无 | ✅ | ✅ |
+| 记忆晋升 | ❌ 手动 | ❌ | ✅ **自动** |
+| 压缩保护 | ❌ | ✅ compact.py | ✅ **配置动态化** |
+| 缓存维护 | ❌ | ❌ | ✅ **自动回收** |
+| 团队共享 | ❌ | ✅ OV | ✅ OV |
+| 配置生效 | 即时 | 需 re-init | ✅ **即时** |
 
-- **L1 Capture** — every turn is captured with turn index, session context, tags, and agent identity
-- **Reward** — outcome signals (success/failure/correction) are applied with temporal discount backpropagation
-- **L2 Policy** — successful patterns are clustered into policy candidates with confidence scores that update over time
-- **L3 Skill** — high-confidence patterns are crystallized into executable skills with trigger conditions and test cases
-- **World Model** — concepts are extracted and clustered; entity-relation triples enable associative retrieval
-
-## Dependencies
-
-- **httpx** (>=0.28) — HTTP client for OpenViking sync
-- **pyyaml** (>=6.0) — YAML config parsing
-- **numpy** (>=1.24) — vector operations for cognitive pipeline
-- **openviking** (optional) — OpenViking cold storage client
+---
 
 ## License
 
