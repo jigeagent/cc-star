@@ -27,6 +27,11 @@ from cc_star.cache.connection import CacheConnection
 from cc_star.cache.schema import ensure_schema
 from cc_star.cache.traces import TraceRepository
 from cc_star.config import ConfigManager
+from cc_star.promote_gate import (
+    evaluate_gate, load_gate_state, save_gate_state, update_gate_state,
+    log_rejection, load_recent_rejections, compute_soft_score,
+    GateState, GateResult,
+)
 
 
 # ── Config helpers ──
@@ -74,6 +79,16 @@ PROMOTE_COOLDOWN_DAYS = int(_env_or("memory.promote_cooldown_days", "CC_STAR_PRO
 """同一主题晋升冷却期（天）。"""
 
 PROMOTE_CANDIDATES_MAX = 10
+
+# ── Gate config (移植自 SkillOpt) ──
+GATE_ENABLED = _env_or("promote.gate_enabled", "CC_STAR_GATE_ENABLED", "True") in ("1", "true", "True")
+"""是否启用验证门控。关闭时退化为旧的单向晋升（force-accept）。"""
+
+GATE_METRIC = _env_or("promote.gate_metric", "CC_STAR_GATE_METRIC", "mixed")
+"""门控指标: hard | soft | mixed。"""
+
+GATE_MIXED_WEIGHT = float(_env_or("promote.gate_mixed_weight", "CC_STAR_GATE_MIXED_WEIGHT", "0.3"))
+"""mixed 模式下 soft 的权重。"""
 """单次 promote 最多晋升的候选条数。"""
 
 PROMOTE_KEYWORDS = [
@@ -237,6 +252,8 @@ def _score_trace(user_content: str, assistant_content: str) -> float:
     Factors:
     - Content length (bonus for substance)
     - Keyword density (bonus for "important" topics)
+    - Metadata penalty (deduct for JSON/XML injected content)
+    - Conversational bonus (reward for real discussion flow)
     - Normalised to 0-10 scale.
     """
     combined = (user_content or "") + " " + (assistant_content or "")
@@ -247,15 +264,46 @@ def _score_trace(user_content: str, assistant_content: str) -> float:
     if length < PROMOTE_MIN_LENGTH:
         return 0.0
 
-    # Base score: 2-6 based on length
+    # ── Metadata penalty: JSON-heavy / XML-tag-heavy content ──
+    json_ratio = combined.count("{") / max(length, 1)
+    xml_tag_count = len(re.findall(r'<[^>]+>', combined))
+    xml_tag_ratio = xml_tag_count / max(length, 1)
+    meta_ratio = json_ratio + xml_tag_ratio
+    metadata_penalty = min(meta_ratio * 100, 8.0)  # up to -8 points
+
+    # ── Specific metadata pattern penalty ──
+    # bridge_context / system-reminder / instructions blocks
+    meta_patterns = [
+        r'<bridge_context>', r'<system-reminder>', r'<function_calls>',
+        r'<user_input>', r'<quoted_message>', r'<interactive_card>',
+        r'<bridge_instructions>',
+        r'"chatId":', r'"senderId":', r'"botOpenId":', r'"chatType"',
+    ]
+    pattern_penalty = sum(5 for p in meta_patterns if re.search(p, combined))
+    pattern_penalty = min(pattern_penalty, 8.0)  # cap at -8
+
+    # ── Conversational bonus ──
+    # Real conversations have: 问答结构、自然语言、换行分段
+    has_natural_lang = 0
+    if "?" in combined or "？" in combined:
+        has_natural_lang += 1
+    if "：" in combined or ":" in combined:
+        has_natural_lang += 1
+    if combined.count("\n") >= 3:
+        has_natural_lang += 1
+    has_chinese = bool(re.findall(r'[一-鿿]', combined))
+    conversation_bonus = min(has_natural_lang * 1.0, 3.0) + (1.0 if has_chinese else 0.0)
+
+    # ── Base score: 2-6 based on length ──
     length_score = min(max((length / 500) * 3, 2.0), 6.0)
 
-    # Keyword density bonus: up to +4
+    # ── Keyword density bonus: up to +4 ──
     text_lower = combined.lower()
     kw_hits = sum(1 for kw in PROMOTE_KEYWORDS if kw.lower() in text_lower)
     keyword_bonus = min(kw_hits * 0.5, 4.0)
 
-    return round(length_score + keyword_bonus, 2)
+    score = length_score + keyword_bonus + conversation_bonus - metadata_penalty - pattern_penalty
+    return round(max(min(score, 10.0), 0.0), 2)
 
 
 def _is_on_cooldown(topic: str, trace_id: str = "") -> bool:
@@ -383,18 +431,65 @@ def promote_hot_traces(dry_run: bool = False, quick: bool = False) -> dict[str, 
         # Sort by score descending, take top N
         candidates = sorted(seen.values(), key=lambda x: x[1], reverse=True)[:PROMOTE_CANDIDATES_MAX]
 
+        # ── Gate setup (移植自 SkillOpt) ──
+        gate_state = load_gate_state() if GATE_ENABLED else GateState()
+        global_step = gate_state.promote_count + 1
+        gate_results: list[GateResult] = []
+
         native_dir = Path(mem_path)
         native_dir.mkdir(parents=True, exist_ok=True)
 
-        for t, score in candidates:
+        # Load existing native memory contents for soft score
+        existing_contents = []
+        if GATE_METRIC in ("soft", "mixed") and native_dir.is_dir():
+            for f in native_dir.glob("*.md"):
+                try:
+                    existing_contents.append(f.read_text("utf-8"))
+                except OSError:
+                    continue
+
+        for t, hard_score in candidates:
             combined = (t.user_content or "") + " " + (t.assistant_content or "")
             topic = combined.strip()[:60]
             if not topic:
                 continue
 
+            # Cooldown check (before gate — cheap filter)
             if _is_on_cooldown(topic, t.id):
                 continue
 
+            # Gate evaluation
+            if GATE_ENABLED:
+                soft_score = compute_soft_score(combined, existing_contents)
+                gate_result = evaluate_gate(
+                    candidate_id=t.id,
+                    candidate_hard=hard_score,
+                    current_state=gate_state,
+                    global_step=global_step,
+                    candidate_soft=soft_score,
+                    metric=GATE_METRIC,
+                    mixed_weight=GATE_MIXED_WEIGHT,
+                )
+                gate_results.append(gate_result)
+
+                if gate_result.action == "reject":
+                    if not dry_run:
+                        log_rejection(gate_result, reason=f"score {hard_score} <= current {gate_state.current_score}")
+                        sys.stderr.write(f"[promote] ✗ REJECT {t.id[:12]} (hard={hard_score} gate={gate_result.candidate_score:.2f} <= {gate_state.current_score:.2f})\n")
+                    continue
+            else:
+                # Gate disabled: force-accept (legacy behavior)
+                gate_result = GateResult(
+                    action="accept", candidate_id=t.id,
+                    candidate_score=hard_score,
+                    current_score=hard_score,
+                    best_score=hard_score,
+                    best_id=t.id,
+                    best_step=global_step,
+                )
+                gate_results.append(gate_result)
+
+            # Accept — write to native memory
             safe_name = re.sub(r'[^\w一-鿿\-]', '_', topic)[:30].strip("_").lower()
             if not safe_name:
                 safe_name = f"promoted_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
@@ -408,10 +503,35 @@ def promote_hot_traces(dry_run: bool = False, quick: bool = False) -> dict[str, 
             if not dry_run:
                 fpath.write_text(md, encoding="utf-8")
                 _log_promotion(topic, str(fpath), t.id)
-                sys.stderr.write(f"[promote] ↑ {fpath.name} (score={score})\n")
+                # Update gate state
+                gate_state = update_gate_state(gate_state, gate_result)
+                action_label = {"accept_new_best": "🏆", "accept": "↑", "reject": "✗", "force_accept": "→"}.get(
+                    gate_result.action, "?"
+                )
+                sys.stderr.write(
+                    f"[promote] {action_label} {fpath.name} "
+                    f"(hard={hard_score} gate={gate_result.candidate_score:.2f} "
+                    f"current={gate_state.current_score:.2f} "
+                    f"best={gate_state.best_score:.2f})\n"
+                )
+
+        # Save gate state
+        if not dry_run and GATE_ENABLED:
+            save_gate_state(gate_state)
 
         result["promoted"] = promoted if not dry_run else f"dry_run ({len(promoted)} would promote)"
         result["count"] = len(promoted)
+        result["gate"] = {
+            "enabled": GATE_ENABLED,
+            "metric": GATE_METRIC,
+            "current_score": gate_state.current_score,
+            "best_score": gate_state.best_score,
+            "best_id": gate_state.best_id[:12] if gate_state.best_id else "",
+            "promote_count": gate_state.promote_count,
+            "reject_count": gate_state.reject_count,
+            "n_accepted": sum(1 for gr in gate_results if gr.action in ("accept", "accept_new_best")),
+            "n_rejected": sum(1 for gr in gate_results if gr.action == "reject"),
+        }
         result["status"] = "ok"
     except Exception as e:
         result["status"] = f"error: {e}"
