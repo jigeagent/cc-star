@@ -17,10 +17,11 @@ from pathlib import Path
 # ── Runtime config (cascade: env var → config.yaml → baked fallback) ──
 try:
     from cc_star.config import ConfigManager
-    _CFG = ConfigManager().load()
-    _GET = lambda k, d=None: _CFG.get(k) or d  # noqa: E731
+    _CFG_MGR = ConfigManager()
+    _CFG = _CFG_MGR.load()
+    _GET = lambda k, d=None: _CFG_MGR.get(k) or d  # noqa: E731
 except Exception:
-    _GET = lambda k, d=None: d                  # standalone fallback
+    _GET = lambda k, d=None: d                      # standalone fallback
 
 
 def _resolve(key: str, env: str, baked: str) -> str:

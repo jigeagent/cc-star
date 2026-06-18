@@ -25,8 +25,9 @@ from cc_star.memos.types import TraceRow
 # ── Runtime config ──
 try:
     from cc_star.config import ConfigManager
-    _CFG = ConfigManager().load()
-    _GET = lambda k, d=None: _CFG.get(k) or d
+    _CFG_MGR = ConfigManager()
+    _CFG = _CFG_MGR.load()
+    _GET = lambda k, d=None: _CFG_MGR.get(k) or d
 except Exception:
     _GET = lambda k, d=None: d
 
