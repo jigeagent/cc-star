@@ -37,6 +37,9 @@ OV_ENABLED = os.environ.get("CC_STAR_OV_ENABLED", "$ov_enabled") in ("1", "true"
 NATIVE_MEMORY_PATH = os.path.expanduser(
     os.environ.get("CC_STAR_MEMORY_PATH", _GET("memory.memory_path", "$memory_path"))
 )
+if not NATIVE_MEMORY_PATH:
+    _codex_home = os.environ.get("CODEX_HOME", os.path.expanduser("~/.codex"))
+    NATIVE_MEMORY_PATH = os.path.join(_codex_home, "memories", "extensions", "cc-star")
 PROMOTE_ENABLED = os.environ.get("CC_STAR_PROMOTE_ENABLED", str(_GET("memory.promote_enabled", "True"))) in ("1", "true", "True")
 PROMOTE_THRESHOLD = int(os.environ.get("CC_STAR_PROMOTE_THRESHOLD", str(_GET("memory.promote_threshold", "3"))))
 PROMOTE_MIN_LENGTH = int(os.environ.get("CC_STAR_PROMOTE_MIN_LENGTH", str(_GET("memory.promote_min_length", "50"))))
@@ -247,6 +250,10 @@ def _should_promote(user_content: str, assistant_content: str) -> bool:
 
     combined = user_content + " " + assistant_content
     if len(combined) < PROMOTE_MIN_LENGTH:
+        return False
+
+    # Filter: skip bridge_context noise (feishu bridge, system messages)
+    if user_content.strip().startswith("<bridge_context>"):
         return False
 
     # Promote keywords — content that should be remembered long-term

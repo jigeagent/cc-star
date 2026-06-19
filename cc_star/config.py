@@ -25,6 +25,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "memory": {
         "max_inject": 5,
         "memory_path": "",
+        "codex_extensions_path": "~/.codex/memories/extensions/cc-star",
         "status_path": "",
         "snapshot_path": "",
         "promote_enabled": True,

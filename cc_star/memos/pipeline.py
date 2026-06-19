@@ -270,6 +270,65 @@ class CognitivePipeline:
             "enabled_stages": [s.value for s in self._config.enabled_stages],
         }
 
+    # ── State persistence ─────────────────────────────────
+
+    def save_state(self, path: str) -> None:
+        """Persist pipeline state (policies, skills, concepts) to JSON."""
+        import json
+        state = {
+            "policies": [
+                {"id": p.id, "name": p.name, "description": p.description,
+                 "trigger_pattern": p.trigger_pattern, "confidence": p.confidence,
+                 "activation_count": p.activation_count,
+                 "source_trace_ids": p.source_trace_ids}
+                for p in self._policies
+            ],
+            "skills": [
+                {"name": s.name, "description": s.description,
+                 "usage_guide": s.usage_guide, "version": s.version}
+                for s in self._skills
+            ],
+            "concepts": [
+                {"id": c.get("id",""), "label": c.get("label",""),
+                 "description": c.get("description","")}
+                for c in self.world_model.list_concepts()
+            ],
+            "traces_processed": len(self._current_traces),
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+
+    @classmethod
+    def load_state(cls, path: str, config: CognitivePipelineConfig | None = None) -> CognitivePipeline:
+        """Load pipeline state from JSON and return a new CognitivePipeline."""
+        import json
+        from cc_star.memos.types import PolicyRow
+        pipeline = cls(config)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            for pdata in state.get("policies", []):
+                pipeline._policies.append(PolicyRow(
+                    id=pdata.get("id",""), name=pdata.get("name",""),
+                    description=pdata.get("description",""),
+                    trigger_pattern=pdata.get("trigger_pattern",""),
+                    action_template="",
+                    confidence=pdata.get("confidence", 0.0),
+                    activation_count=pdata.get("activation_count", 0),
+                    source_trace_ids=pdata.get("source_trace_ids", []),
+                    created_at="",
+                ))
+            for sdata in state.get("skills", []):
+                from cc_star.memos.types import SkillRow
+                pipeline._skills.append(SkillRow(
+                    name=sdata.get("name",""),
+                    description=sdata.get("description",""),
+                    usage_guide=sdata.get("usage_guide",""),
+                ))
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+        return pipeline
+
     def reset(self) -> None:
         """Reset pipeline state (for testing)."""
         self._policies = []

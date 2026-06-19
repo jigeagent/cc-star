@@ -37,6 +37,7 @@ NATIVE_MEMORY_PATH = os.path.expanduser(
 MIN_WORDS = 3
 MAX_MEMORIES = int(os.environ.get("CC_STAR_MAX_INJECT", _GET("memory.max_inject", "$max_inject")))
 MAX_INJECT_NATIVE = int(os.environ.get("CC_STAR_MAX_INJECT_NATIVE", _GET("memory.max_inject_native", "3")))
+CODEX_HOME = os.environ.get("CODEX_HOME", os.path.expanduser("~/.codex"))
 
 
 def sanitize_query(text: str) -> str:
@@ -147,6 +148,51 @@ def search_native(query: str, limit: int = 5) -> list[dict]:
     return results[:limit]
 
 
+# ── Source 2b: Codex native extensions ──
+
+
+def search_codex_extensions(query: str, limit: int = 5) -> list[dict]:
+    """Search Codex extensions/ directory for native memory files."""
+    ext_dir = Path(CODEX_HOME) / "memories" / "extensions"
+    if not ext_dir.is_dir():
+        return []
+    query_tokens = _tokenize(query)
+    if not query_tokens:
+        return []
+    results = []
+    for fpath in sorted(ext_dir.glob("**/*.md")):
+        try:
+            text = fpath.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        file_tokens = _tokenize(text)
+        overlap = query_tokens & file_tokens
+        if not overlap:
+            continue
+        score = len(overlap) / max(len(query_tokens), 1)
+        title = ""
+        for line in text.split("\n"):
+            if line.startswith("# "):
+                title = line.lstrip("# ").strip()
+                break
+        if not title:
+            title = fpath.stem
+        rel = fpath.relative_to(ext_dir)
+        results.append({
+            "id": f"codex_ext:{rel}",
+            "session_id": str(rel),
+            "user_content": f"【Codex记忆】{title}\n\n{text[:300]}",
+            "assistant_content": "",
+            "reward": score,
+            "tags": ["codex", "extension"],
+            "created_at": "",
+            "source": "codex_ext",
+            "score": score,
+        })
+    results.sort(key=lambda r: r["score"], reverse=True)
+    return results[:limit]
+
+
 # ── Source 3: OpenViking ──
 
 
@@ -213,11 +259,12 @@ def main() -> None:
     t0 = time.time()
     local_results = search_local(repo, prompt, limit=8)
     native_results = search_native(prompt, limit=MAX_INJECT_NATIVE)
+    codex_results = search_codex_extensions(prompt, limit=MAX_INJECT_NATIVE)
     ov_results = search_ov(prompt, limit=8)
     elapsed = time.time() - t0
 
     # Merge via RRF
-    merged = rrf_merge([local_results, native_results, ov_results], k=60)
+    merged = rrf_merge([local_results, native_results, codex_results, ov_results], k=60)
     merged = merged[:MAX_MEMORIES]
 
     if not merged:
@@ -235,6 +282,7 @@ def main() -> None:
     total = len(merged)
     local_n = sum(1 for m in merged if m["source"] == "local")
     native_n = sum(1 for m in merged if m["source"] == "native")
+    codex_n = sum(1 for m in merged if m["source"] == "codex_ext")
     ov_n = sum(1 for m in merged if m["source"] == "ov")
 
     output = {

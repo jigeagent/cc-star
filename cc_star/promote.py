@@ -54,7 +54,13 @@ def _cachedb_path() -> str:
 
 def _native_memory_path() -> str:
     raw = os.environ.get("CC_STAR_MEMORY_PATH", "") or _cfg("memory.memory_path", "")
-    return os.path.expanduser(raw) if raw else ""
+    if raw:
+        return os.path.expanduser(raw)
+    codex_home = os.environ.get("CODEX_HOME", os.path.expanduser("~/.codex"))
+    codex_ext = os.path.join(codex_home, "memories", "extensions", "cc-star")
+    if os.path.isdir(os.path.dirname(os.path.dirname(codex_ext))):
+        return codex_ext
+    return ""
 
 
 def _promote_log_path() -> Path:
@@ -292,7 +298,7 @@ def _score_trace(user_content: str, assistant_content: str) -> float:
     if combined.count("\n") >= 3:
         has_natural_lang += 1
     has_chinese = bool(re.findall(r'[一-鿿]', combined))
-    conversation_bonus = min(has_natural_lang * 1.0, 3.0) + (1.0 if has_chinese else 0.0)
+    conversation_bonus = min(has_natural_lang * 1.0, 2.0) + (0.5 if has_chinese else 0.0)  # reduced cap
 
     # ── Base score: 2-6 based on length ──
     length_score = min(max((length / 500) * 3, 2.0), 6.0)
@@ -300,10 +306,35 @@ def _score_trace(user_content: str, assistant_content: str) -> float:
     # ── Keyword density bonus: up to +4 ──
     text_lower = combined.lower()
     kw_hits = sum(1 for kw in PROMOTE_KEYWORDS if kw.lower() in text_lower)
-    keyword_bonus = min(kw_hits * 0.5, 4.0)
+    keyword_bonus = min(kw_hits * 0.5, 2.5)  # reduced cap: avoid 10.0 saturation
 
     score = length_score + keyword_bonus + conversation_bonus - metadata_penalty - pattern_penalty
     return round(max(min(score, 10.0), 0.0), 2)
+
+
+def _compute_diversity_penalty(combined, existing_contents):
+    if not combined or not existing_contents:
+        return 0.0
+    cjk = re.findall(r"[一-鿿㐀-䶿]", combined)
+    c_bigrams = {cjk[i] + cjk[i + 1] for i in range(len(cjk) - 1)}
+    c_en = set(re.findall(r"[a-z0-9_\-]{3,}", combined.lower()))
+    c_tokens = c_bigrams | c_en
+    if not c_tokens:
+        return 0.0
+    max_j = 0.0
+    for existing in existing_contents:
+        ec = re.findall(r"[一-鿿㐀-䶿]", existing)
+        eb = {ec[i] + ec[i + 1] for i in range(len(ec) - 1)}
+        ee = set(re.findall(r"[a-z0-9_\-]{3,}", existing.lower()))
+        et = eb | ee
+        if not et:
+            continue
+        jaccard = len(c_tokens & et) / max(len(c_tokens | et), 1)
+        if jaccard > max_j:
+            max_j = jaccard
+    if max_j <= 0.3:
+        return 0.0
+    return round(min((max_j - 0.3) * 4.5, 3.0), 2)
 
 
 def _is_on_cooldown(topic: str, trace_id: str = "") -> bool:
@@ -421,6 +452,12 @@ def promote_hot_traces(dry_run: bool = False, quick: bool = False) -> dict[str, 
             if t.id in seen:
                 continue
             score = _score_trace(t.user_content or "", t.assistant_content or "")
+            if score >= PROMOTE_THRESHOLD_SCORE and existing_contents:
+                dp = _compute_diversity_penalty(
+                    (t.user_content or "") + " " + (t.assistant_content or ""),
+                    existing_contents,
+                )
+                score = round(max(score - dp, 0.0), 2)
             if score >= PROMOTE_THRESHOLD_SCORE:
                 seen[t.id] = (t, score)
 

@@ -155,8 +155,8 @@ def _get_template_vars(config: dict[str, Any]) -> dict[str, str]:
     ov_enabled = config.get("ov", {}).get("enabled", False)
 
     return {
-        "agent_name": config.get("agent", {}).get("name", "assistant"),
-        "tags": json.dumps(config.get("agent", {}).get("tags", ["claude-code"])),
+        "agent_name": config.get("agent", {}).get("name", "codex"),
+        "tags": json.dumps(config.get("agent", {}).get("tags", ["codex"])),
         "data_dir": storage_path,
         "cache_path": os.path.join(storage_path, "cache.db"),
         "sessions_file": os.path.join(storage_path, "sessions.jsonl"),
@@ -288,7 +288,7 @@ class HookInstaller:
 
     def _write_initial_memories(self, mem_dir: Path, config: dict[str, Any]) -> None:
         """Write initial core memory files when native memory dir is empty."""
-        agent_name = config.get("agent", {}).get("name", "assistant")
+        agent_name = config.get("agent", {}).get("name", "codex")
         memories = {
             "cc-star-memory-system.md": (
                 "# cc-star 记忆系统\n\n"
