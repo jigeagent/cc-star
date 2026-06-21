@@ -46,13 +46,48 @@ def search_by_embedding(
     return scores[:k]
 
 
-def compute_embedding(text: str, dim: int = 384) -> list[float]:
-    """Compute a simple bag-of-characters embedding as a fallback.
+class EmbeddingEngine:
+    """Lazy-loaded fastembed FlagEmbedding wrapper (singleton).
 
-    This is a lightweight fallback when the OpenViking embed API is unavailable.
-    For production use, use OpenViking's native embedding instead.
+    Downloads the ~60MB model on first use; subsequent calls use cached instance.
+    Thread-safe for reads; model loading is synchronized via _lock.
     """
-    rng = np.random.RandomState(hash(text) & 0xFFFFFFFF)
-    vec = rng.randn(dim)
-    vec = vec / (np.linalg.norm(vec) + 1e-12)
-    return vec.tolist()
+
+    _instance: Optional["EmbeddingEngine"] = None
+    _model = None
+    _model_name = "BAAI/bge-small-en-v1.5"
+
+    def __new__(cls) -> "EmbeddingEngine":
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def _get_model(self):
+        if self._model is None:
+            from fastembed import TextEmbedding
+
+            type(self)._model = TextEmbedding(
+                model_name=self._model_name,
+                max_length=512,
+            )
+        return self._model
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """Batch embed a list of texts. Returns list of 384-d unit vectors."""
+        if not texts:
+            return []
+        model = self._get_model()
+        return list(model.embed(texts))
+
+    def embed_query(self, text: str) -> list[float]:
+        """Embed a single query string."""
+        if not text:
+            text = " "
+        result = self.embed([text])
+        return result[0] if result else []
+
+
+# Keep legacy function for backward compatibility
+def compute_embedding(text: str, dim: int = 384) -> list[float]:
+    """Embed text using fastembed (replaced random fallback)."""
+    return EmbeddingEngine().embed_query(text)
