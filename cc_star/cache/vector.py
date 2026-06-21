@@ -37,8 +37,9 @@ def search_by_embedding(
         return []
 
     scores: list[tuple[str, float]] = []
+    query_dim = len(query_embedding) if query_embedding is not None else 0
     for cid, emb in candidates:
-        if emb and len(emb) > 0:
+        if emb and len(emb) == query_dim:
             sim = cosine_similarity(query_embedding, emb)
             scores.append((cid, sim))
 

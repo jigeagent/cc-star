@@ -810,13 +810,18 @@ def backfill_embeddings(
         return {"error": f"cannot open cache: {e}"}
 
     all_traces = repo.list_recent(limit=50000)
-    pending = [t for t in all_traces if t.embedding is None]
+    target_dim = 384  # fastembed bge-small-en-v1.5
+    pending = [
+        t for t in all_traces
+        if t.embedding is None or len(t.embedding) != target_dim
+    ]
+    dim_mismatch = sum(1 for t in all_traces if t.embedding is not None and len(t.embedding) != target_dim)
     total = len(all_traces)
     pending_count = len(pending)
 
     if dry_run:
         conn.close_all()
-        return {"processed": 0, "total": total, "pending": pending_count, "dry_run": True}
+        return {"processed": 0, "total": total, "pending": pending_count, "dim_mismatch": dim_mismatch, "dry_run": True}
 
     engine = EmbeddingEngine()
     processed = 0
