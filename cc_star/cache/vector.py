@@ -57,6 +57,7 @@ class EmbeddingEngine:
     _instance: Optional["EmbeddingEngine"] = None
     _model = None
     _model_name = "BAAI/bge-small-en-v1.5"
+    _model_error: Optional[Exception] = None
 
     def __new__(cls) -> "EmbeddingEngine":
         if cls._instance is None:
@@ -64,13 +65,31 @@ class EmbeddingEngine:
         return cls._instance
 
     def _get_model(self):
+        if self._model_error is not None:
+            raise RuntimeError(
+                f"Embedding model is in a failed state and cannot be used. "
+                f"Original error: {self._model_error}"
+            ) from self._model_error
         if self._model is None:
-            from fastembed import TextEmbedding
+            try:
+                from fastembed import TextEmbedding
+            except ImportError as e:
+                type(self)._model_error = e
+                raise RuntimeError(
+                    "fastembed is not installed. "
+                    "Run `pip install cc-star[vector]` to enable embedding support."
+                ) from e
 
-            type(self)._model = TextEmbedding(
-                model_name=self._model_name,
-                max_length=512,
-            )
+            try:
+                type(self)._model = TextEmbedding(
+                    model_name=self._model_name,
+                    max_length=512,
+                )
+            except Exception as e:
+                type(self)._model_error = e
+                raise RuntimeError(
+                    f"Failed to load embedding model '{self._model_name}': {e}"
+                ) from e
         return self._model
 
     def embed(self, texts: list[str]) -> list[list[float]]:

@@ -314,7 +314,13 @@ def cmd_uninstall(args: argparse.Namespace) -> None:
 
 def cmd_promote(args: argparse.Namespace) -> None:
     """Run memory maintenance: cache limit, dedup, hot promote."""
-    from cc_star.promote import run_maintenance
+    from cc_star.promote import run_maintenance, backfill_embeddings
+
+    if args.backfill_embeddings:
+        result = backfill_embeddings()
+        json.dump(result, sys.stdout, indent=2, ensure_ascii=False)
+        return
+
     results = run_maintenance(dry_run=args.dry_run or False)
     json.dump(results, sys.stdout, indent=2, ensure_ascii=False)
 
@@ -484,6 +490,8 @@ def main() -> None:
     promote_p = sub.add_parser("promote", help="Run memory maintenance (cache limit, dedup, hot promote)")
     promote_p.add_argument("--dry-run", "-n", action="store_true",
                            help="Preview without making changes")
+    promote_p.add_argument("--backfill-embeddings", action="store_true",
+                           help="Backfill missing embeddings for all traces without one")
 
     # doctor
     sub.add_parser("doctor", help="全面自检：环境 + 配置 + hook + DB + OV 一次查清")

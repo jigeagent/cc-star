@@ -144,7 +144,7 @@ class TraceRepository:
         Falls back to pure FTS5 when embeddings are unavailable.
         """
         # 1. FTS5 results (TraceRow objects)
-        fts_results = self.search_fts(query, limit=limit)
+        fts_results = self.search_fts(query, limit=limit * 3)
 
         # 2. Vector results (if embeddings available)
         emb_candidates = self.get_all_embeddings(limit=5000)
@@ -158,7 +158,7 @@ class TraceRepository:
         if query_emb is None or len(query_emb) == 0:
             return fts_results
 
-        vec_matches = search_by_embedding(query_emb, emb_candidates, k=limit)
+        vec_matches = search_by_embedding(query_emb, emb_candidates, k=limit * 3)
 
         # 3. Build RRF input
         fts_dicts = [
