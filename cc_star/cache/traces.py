@@ -131,6 +131,67 @@ class TraceRepository:
                     pass
         return result
 
+    def search_hybrid(self, query: str, limit: int = 8) -> list[TraceRow]:
+        """FTS5 + semantic vector hybrid search with RRF fusion.
+
+        Falls back to pure FTS5 when embeddings are unavailable.
+        """
+        # 1. FTS5 results (TraceRow objects)
+        fts_results = self.search_fts(query, limit=limit)
+
+        # 2. Vector results (if embeddings available)
+        emb_candidates = self.get_all_embeddings(limit=5000)
+        if not emb_candidates:
+            return fts_results  # degrade gracefully
+
+        from cc_star.cache.vector import EmbeddingEngine, search_by_embedding
+        from cc_star.retrieval.ranker import rrf_merge
+
+        query_emb = EmbeddingEngine().embed_query(query)
+        if query_emb is None or len(query_emb) == 0:
+            return fts_results
+
+        vec_matches = search_by_embedding(query_emb, emb_candidates, k=limit)
+
+        # 3. Build RRF input
+        fts_dicts = [
+            {"id": t.id, "score": 1.0 / (i + 1)}
+            for i, t in enumerate(fts_results)
+        ]
+        vec_dicts = [
+            {"id": cid, "score": float(score)}
+            for cid, score in vec_matches
+        ]
+
+        # 4. RRF fusion
+        fused = rrf_merge([fts_dicts, vec_dicts], k=60)
+
+        # 5. Build ordered result list (dedup, preserve RRF order)
+        fts_map = {t.id: t for t in fts_results}
+        seen: set[str] = set()
+        ordered: list[TraceRow] = []
+        for r in fused:
+            tid = r["id"]
+            if tid in seen:
+                continue
+            seen.add(tid)
+            if tid in fts_map:
+                ordered.append(fts_map[tid])
+            else:
+                # Vector-only match: fetch separately
+                t = self.get(tid)
+                if t:
+                    ordered.append(t)
+        return ordered[:limit]
+
+    def update_embedding(self, trace_id: str, embedding: list[float]) -> None:
+        """Update the embedding vector for a single trace."""
+        import json
+        self._cache.execute(
+            "UPDATE traces SET embedding = ? WHERE id = ?",
+            (json.dumps(embedding), trace_id),
+        )
+
     @staticmethod
     def _trace_to_row(trace: TraceRow) -> tuple:
         return (
