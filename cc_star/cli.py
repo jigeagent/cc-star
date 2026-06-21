@@ -174,6 +174,12 @@ def cmd_status(args: argparse.Namespace) -> None:
         print(f"  Traces:   {total}")
         print(f"  Unsynced: {unsynced}")
 
+        # Embedding coverage
+        embedded = repo.count_embedded()
+        pct = (embedded / total * 100) if total > 0 else 0
+        warn = " 嵌入覆盖率低于 50%" if pct < 50 else ""
+        print(f"  嵌入覆盖率:  {embedded} / {total} ({pct:.0f}%){warn}")
+
         # OV status
         ov_url = config.get("ov", {}).get("url", "")
         ov_enabled = config.get("ov", {}).get("enabled", False)
