@@ -446,6 +446,17 @@ def promote_hot_traces(dry_run: bool = False, quick: bool = False) -> dict[str, 
             recent = repo.list_recent(limit=100)
             all_traces.extend(recent)
 
+        # Pre-load existing native memory contents for diversity penalty
+        native_dir = Path(mem_path)
+        native_dir.mkdir(parents=True, exist_ok=True)
+        existing_contents: list[str] = []
+        if GATE_METRIC in ("soft", "mixed") and native_dir.is_dir():
+            for f in native_dir.glob("*.md"):
+                try:
+                    existing_contents.append(f.read_text("utf-8"))
+                except OSError:
+                    continue
+
         # Dedup by id and score
         seen = {}
         for t in all_traces:
@@ -472,18 +483,6 @@ def promote_hot_traces(dry_run: bool = False, quick: bool = False) -> dict[str, 
         gate_state = load_gate_state() if GATE_ENABLED else GateState()
         global_step = gate_state.promote_count + 1
         gate_results: list[GateResult] = []
-
-        native_dir = Path(mem_path)
-        native_dir.mkdir(parents=True, exist_ok=True)
-
-        # Load existing native memory contents for soft score
-        existing_contents = []
-        if GATE_METRIC in ("soft", "mixed") and native_dir.is_dir():
-            for f in native_dir.glob("*.md"):
-                try:
-                    existing_contents.append(f.read_text("utf-8"))
-                except OSError:
-                    continue
 
         for t, hard_score in candidates:
             combined = (t.user_content or "") + " " + (t.assistant_content or "")

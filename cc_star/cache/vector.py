@@ -50,7 +50,7 @@ class EmbeddingEngine:
     """Lazy-loaded fastembed FlagEmbedding wrapper (singleton).
 
     Downloads the ~60MB model on first use; subsequent calls use cached instance.
-    Thread-safe for reads; model loading is synchronized via _lock.
+    Thread-safe for reads; model loading is synchronized internally.
     """
 
     _instance: Optional["EmbeddingEngine"] = None
@@ -88,6 +88,6 @@ class EmbeddingEngine:
 
 
 # Keep legacy function for backward compatibility
-def compute_embedding(text: str, dim: int = 384) -> list[float]:
+def compute_embedding(text: str) -> list[float]:
     """Embed text using fastembed (replaced random fallback)."""
     return EmbeddingEngine().embed_query(text)
