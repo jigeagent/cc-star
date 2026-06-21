@@ -784,6 +784,63 @@ def run_maintenance(dry_run: bool = False) -> dict[str, Any]:
     return results
 
 
+# ── 7. Embedding backfill ──
+
+
+def backfill_embeddings(
+    cache_path: str = "",
+    dry_run: bool = False,
+    batch_size: int = 32,
+) -> dict[str, object]:
+    """Backfill missing embeddings for all traces without one.
+
+    Returns {"processed": N, "total": M, "elapsed_seconds": T}.
+    """
+    import time
+    from cc_star.cache.vector import EmbeddingEngine
+
+    if not cache_path:
+        cache_path = _cachedb_path()
+
+    try:
+        conn = CacheConnection(cache_path)
+        ensure_schema(conn)
+        repo = TraceRepository(conn)
+    except Exception as e:
+        return {"error": f"cannot open cache: {e}"}
+
+    all_traces = repo.list_recent(limit=50000)
+    pending = [t for t in all_traces if t.embedding is None]
+    total = len(all_traces)
+    pending_count = len(pending)
+
+    if dry_run:
+        conn.close_all()
+        return {"processed": 0, "total": total, "pending": pending_count, "dry_run": True}
+
+    engine = EmbeddingEngine()
+    processed = 0
+    t0 = time.time()
+
+    for i in range(0, pending_count, batch_size):
+        batch = pending[i:i + batch_size]
+        texts = [
+            (t.user_content or "") + " " + (t.assistant_content or "")
+            for t in batch
+        ]
+        embeddings = engine.embed(texts)
+        for t, emb in zip(batch, embeddings):
+            # fastembed returns numpy arrays; convert to plain list for JSON serialization
+            if hasattr(emb, "tolist"):
+                emb = emb.tolist()
+            repo.update_embedding(t.id, emb)
+            processed += 1
+
+    conn.close_all()
+    elapsed = time.time() - t0
+    return {"processed": processed, "total": total, "pending": pending_count, "elapsed_seconds": round(elapsed, 1)}
+
+
 # ── CLI ──
 
 
@@ -791,6 +848,13 @@ def main() -> None:
     """CLI entry point."""
     dry_run = "--dry-run" in sys.argv or "-n" in sys.argv
     quick = "--quick" in sys.argv or "-q" in sys.argv
+
+    if "--backfill-embeddings" in sys.argv:
+        dry = "--dry-run" in sys.argv
+        result = backfill_embeddings(dry_run=dry)
+        json.dump(result, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+        return
 
     if "--cache-only" in sys.argv:
         results = enforce_cache_limit(dry_run=dry_run)
