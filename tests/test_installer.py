@@ -18,6 +18,9 @@ from cc_star.installer import (
     _find_settings_target,
     _get_template_vars,
     _merge_hooks,
+    _read_hooks_registry,
+    _restore_hooks_from_registry,
+    _write_hooks_registry,
 )
 
 
@@ -268,6 +271,104 @@ class TestTemplateVars:
         assert vars["sync_batch"] == "100"
         # Should contain "custom" in tags JSON
         assert "custom" in vars["tags"]
+
+
+class TestHooksRegistry:
+    """Test hooks.registry.json read/write/restore."""
+
+    def test_write_and_read_registry(self, tmp_path):
+        """Test writing registry and reading it back."""
+        config_dir = tmp_path / ".cc-star"
+        settings_path = tmp_path / ".claude" / "settings.json"
+        hooks_config = {
+            "SessionStart": [{"type": "command", "command": "python start.py", "timeout": 10}],
+            "Stop": [{"type": "command", "command": "python stop.py", "timeout": 15}],
+        }
+
+        registry = _write_hooks_registry(settings_path, hooks_config, config_dir)
+
+        assert registry["version"] == "0.7.0"
+        assert registry["hooks"] == hooks_config
+        assert registry["source"] == str(settings_path)
+        assert "created_at" in registry
+        assert "updated_at" in registry
+
+        # Read back
+        read_back = _read_hooks_registry(config_dir)
+        assert read_back is not None
+        assert read_back["hooks"] == hooks_config
+
+    def test_registry_persists_created_at(self, tmp_path):
+        """Test that re-writing registry preserves original created_at."""
+        config_dir = tmp_path / ".cc-star"
+        settings_path = tmp_path / ".claude" / "settings.json"
+        hooks_config = {"Stop": [{"type": "command", "command": "python stop.py", "timeout": 10}]}
+
+        r1 = _write_hooks_registry(settings_path, hooks_config, config_dir)
+        created = r1["created_at"]
+
+        import time
+        time.sleep(0.01)  # Ensure different timestamp
+
+        r2 = _write_hooks_registry(settings_path, hooks_config, config_dir)
+        assert r2["created_at"] == created  # Preserved
+        assert r2["updated_at"] >= created  # Updated
+
+    def test_read_missing_registry(self, tmp_path):
+        """Test reading non-existent registry returns None."""
+        config_dir = tmp_path / ".cc-star"
+        assert _read_hooks_registry(config_dir) is None
+
+    def test_read_corrupt_registry(self, tmp_path):
+        """Test reading corrupt registry returns None."""
+        config_dir = tmp_path / ".cc-star"
+        config_dir.mkdir(parents=True)
+        reg_path = config_dir / "hooks.registry.json"
+        reg_path.write_text("{corrupt", encoding="utf-8")
+        assert _read_hooks_registry(config_dir) is None
+
+    def test_restore_hooks_from_registry(self, tmp_path):
+        """Test restoring hooks from registry into settings.json."""
+        config_dir = tmp_path / ".cc-star"
+        settings_dir = tmp_path / ".claude"
+        settings_path = settings_dir / "settings.json"
+        hooks_config = {
+            "Stop": [{"type": "command", "command": "python stop.py", "timeout": 10}],
+            "SessionStart": [{"type": "command", "command": "python start.py", "timeout": 5}],
+        }
+
+        # Write registry
+        _write_hooks_registry(settings_path, hooks_config, config_dir)
+
+        # Simulate settings.json with different (non-cc-star) content
+        settings_dir.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(
+            json.dumps({"skey": "sval"}), encoding="utf-8",
+        )
+
+        with (
+            patch("cc_star.installer.Path.home", return_value=tmp_path),
+            patch("cc_star.installer.Path.cwd", return_value=tmp_path),
+        ):
+            result = _restore_hooks_from_registry(config_dir)
+
+        assert result is not None
+        assert "恢复" in result
+        assert "2" in result  # 2 events restored
+
+        # Verify settings.json now has hooks
+        restored = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert "hooks" in restored
+        assert "Stop" in restored["hooks"]
+        assert "SessionStart" in restored["hooks"]
+        # Original key preserved
+        assert restored["skey"] == "sval"
+
+    def test_restore_no_registry(self, tmp_path):
+        """Test restore returns None when no registry exists."""
+        config_dir = tmp_path / ".cc-star"
+        result = _restore_hooks_from_registry(config_dir)
+        assert result is None
 
 
 @pytest.fixture

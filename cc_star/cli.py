@@ -325,21 +325,90 @@ def cmd_promote(args: argparse.Namespace) -> None:
     json.dump(results, sys.stdout, indent=2, ensure_ascii=False)
 
 
+def cmd_graph(args: argparse.Namespace) -> None:
+    """Context graph operations."""
+    from cc_star.graph.repository import GraphRepository
+
+    data_dir = _get_config_manager().data_dir
+    graph_path = data_dir / "graph.db"
+
+    if not graph_path.is_file():
+        print(json.dumps({"ok": False, "error": "graph.db not found — no entities extracted yet"},
+                         ensure_ascii=False))
+        return
+
+    cache = CacheConnection(str(graph_path))
+    repo = GraphRepository(cache)
+
+    try:
+        sub = args.graph_command
+
+        if sub == "search":
+            results = repo.search_entities(args.query, limit=args.limit)
+            entities = []
+            for r in results:
+                sg = repo.get_subgraph(r["id"], max_depth=args.depth)
+                entities.append({
+                    "entity": r,
+                    "subgraph": {
+                        "neighbors": sg["neighbors"],
+                        "relations": sg["relations"],
+                    },
+                })
+            json.dump({"ok": True, "results": entities}, sys.stdout,
+                      indent=2, ensure_ascii=False)
+
+        elif sub == "trace":
+            matches = repo.search_entities(args.query, limit=1)
+            if not matches:
+                json.dump({"ok": False, "error": f"entity not found: {args.query}"},
+                          sys.stdout, ensure_ascii=False)
+                return
+            chain = repo.trace_decision_chain(matches[0]["id"], max_depth=args.depth)
+            json.dump({"ok": True, "entity": matches[0], "chain": chain},
+                      sys.stdout, indent=2, ensure_ascii=False)
+
+        elif sub == "stats":
+            stats = repo.stats()
+            json.dump({"ok": True, "stats": stats}, sys.stdout,
+                      indent=2, ensure_ascii=False)
+
+    finally:
+        cache.close()
+
+
 def cmd_doctor(args: argparse.Namespace) -> None:
     """全面自检：环境 + 配置 + hook + DB + OV 一次查清."""
+    do_fix = getattr(args, "fix", False)
+
     print()
-    print(f"  🏥 cc-star doctor — 全面自检")
+    print(f"  🏥 cc-star v{__version__} doctor — 全面自检")
     print(f"  ───────────────────────────────────")
+    if do_fix:
+        print(f"  🔧 --fix 模式: 自动修复常见问题")
     print()
 
     cfg_mgr = _get_config_manager()
     config_dir = cfg_mgr.config_path.parent
     data_dir = cfg_mgr.data_dir
     all_ok = True
+    fixed_items: list[str] = []
 
     # 1. 配置
-    if (config_dir / "config.yaml").is_file():
-        print(f"  ✅ 配置文件  {config_dir / 'config.yaml'}")
+    config_file = config_dir / "config.yaml"
+    if config_file.is_file():
+        print(f"  ✅ 配置文件  {config_file}")
+    elif do_fix:
+        print(f"  ❌ 配置文件缺失 — --fix: 运行 init ...")
+        try:
+            installer = HookInstaller(cfg_mgr)
+            installer.install(agent_name="assistant", non_interactive=True)
+            if config_file.is_file():
+                fixed_items.append("配置文件 (init)")
+                print(f"  ✅ 已修复: 配置文件已通过 init 重建")
+        except Exception as e:
+            print(f"  ❌ 自动修复失败: {e}")
+            all_ok = False
     else:
         print(f"  ❌ 配置文件缺失 — 请运行 cc-star init")
         all_ok = False
@@ -358,22 +427,54 @@ def cmd_doctor(args: argparse.Namespace) -> None:
             print(f"  ❌ 数据库异常 — {e}")
             all_ok = False
     else:
-        print(f"  ⚠️ 数据库文件不存在（新装机正常，使用后会自动创建）")
+        print(f"  ⚪ 数据库文件不存在（新装机正常，使用后会自动创建）")
 
     # 3. Hook 脚本
     hooks_dir = config_dir / "hooks"
-    expected = ["session_start.py", "inject.py", "store.py", "summary.py", "compact.py"]
+    expected = ["session_start.py", "inject.py", "store.py", "summary.py", "compact.py", "graph_extract.py"]
     if hooks_dir.is_dir():
         present = [p.name for p in hooks_dir.glob("*.py")]
         missing = [f for f in expected if f not in present]
         if not missing:
-            print(f"  ✅ Hook 脚本  {len(present)}/5 齐全")
+            print(f"  ✅ Hook 脚本  {len(present)}/{len(expected)} 齐全")
+        elif do_fix:
+            print(f"  ⚠️ Hook 脚本缺失: {missing} — --fix: 重新渲染 ...")
+            try:
+                config = cfg_mgr.load()
+                installer = HookInstaller(cfg_mgr)
+                installer._register_hooks(hooks_dir, config)
+                # Re-render hook scripts
+                from cc_star.installer import TemplateRenderer, _get_template_vars
+                renderer = TemplateRenderer(hooks_dir.parent.parent / "templates")
+                vars = _get_template_vars(config)
+                for tmpl_name in renderer.list_templates():
+                    rendered = renderer.render(tmpl_name, vars)
+                    output_name = tmpl_name.replace(".j2", "")
+                    output_path = hooks_dir / output_name
+                    output_path.write_text(rendered, encoding="utf-8")
+                fixed_items.append(f"Hook 脚本 ({len(missing)} 个)")
+                print(f"  ✅ 已修复: Hook 脚本已重新渲染")
+            except Exception as e:
+                print(f"  ❌ 自动修复失败: {e}")
+                all_ok = False
         else:
             print(f"  ⚠️ Hook 脚本缺失 — {missing}")
             all_ok = False
     else:
-        print(f"  ❌ Hook 目录缺失 — 请运行 cc-star init --force")
-        all_ok = False
+        if do_fix:
+            print(f"  ❌ Hook 目录缺失 — --fix: 运行 init ...")
+            try:
+                installer = HookInstaller(cfg_mgr)
+                installer.install(agent_name="assistant", non_interactive=True)
+                if hooks_dir.is_dir():
+                    fixed_items.append("Hook 目录 (init)")
+                    print(f"  ✅ 已修复: Hook 目录已通过 init 重建")
+            except Exception as e:
+                print(f"  ❌ 自动修复失败: {e}")
+                all_ok = False
+        else:
+            print(f"  ❌ Hook 目录缺失 — 请运行 cc-star init --force")
+            all_ok = False
 
     # 4. Claude Code settings hooks
     settings_path = Path.home() / ".claude" / "settings.json"
@@ -384,12 +485,69 @@ def cmd_doctor(args: argparse.Namespace) -> None:
             hooks = s.get("hooks", {})
             cc_events = [e for e in hooks if hooks[e]]
             print(f"  ✅ Claude Code {len(cc_events)}/{len(hooks)} 事件已注册 hook")
+
+            # Check cc-star hooks specifically
+            required = ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "PreCompact", "PostCompact"]
+            missing_hooks = [h for h in required if h not in hooks]
+            if missing_hooks:
+                print(f"  🔴 cc-star HOOKS MISSING: {missing_hooks}")
+                # Auto-restore from hooks.registry.json
+                try:
+                    from cc_star.installer import _restore_hooks_from_registry
+                    result = _restore_hooks_from_registry(config_dir)
+                    if result:
+                        fixed_items.append("settings.json hooks (registry 恢复)")
+                        print(f"  ✅ 已修复 — {result}")
+                        # Re-check
+                        try:
+                            s2 = json.loads(settings_path.read_text(encoding="utf-8"))
+                            hooks2 = s2.get("hooks", {})
+                            still_missing = [h for h in required if h not in hooks2]
+                            if still_missing:
+                                print(f"  ⚠️ 恢复后仍缺失: {still_missing}")
+                                all_ok = False
+                            else:
+                                print(f"  ✅ 全部 hook 已恢复")
+                        except Exception:
+                            all_ok = False
+                    else:
+                        print(f"  ❌ 自动恢复失败 — hooks.registry.json 不存在或格式异常")
+                        print(f"     请重新运行 cc-star init --force 重新初始化")
+                        all_ok = False
+                except Exception as e:
+                    print(f"  ❌ 自动恢复异常 — {e}")
+                    all_ok = False
         except Exception as e:
             print(f"  ⚠️ 读取 settings.json 失败 — {e}")
     else:
-        print(f"  ⚠️ Claude Code settings.json 不存在（未安装 Claude Code?）")
+        print(f"  ⚪ Claude Code settings.json 不存在（未安装 Claude Code?）")
 
-    # 5. 原生记忆
+    # 5. Context Graph (graph.db)
+    graph_path = data_dir / "graph.db"
+    if graph_path.is_file():
+        try:
+            from cc_star.graph.repository import GraphRepository
+            graph_cache = CacheConnection(str(graph_path))
+            graph_repo = GraphRepository(graph_cache)
+            gs = graph_repo.stats()
+            graph_cache.close()
+            size_kb = graph_path.stat().st_size / 1024
+            print(f"  ✅ Context Graph  {graph_path} ({size_kb:.0f}KB, "
+                  f"{gs['entities']}实体, {gs['relations']}关系, "
+                  f"{gs['events']}事件, {gs['failed_events']}失败)")
+        except Exception as e:
+            print(f"  ⚠️ Context Graph 异常 — {e}")
+    else:
+        print(f"  ⚪ Context Graph 未创建（首次运行后自动生成）")
+
+    # 6. hooks.registry.json
+    registry_path = config_dir / "hooks.registry.json"
+    if registry_path.is_file():
+        print(f"  ✅ hooks.registry.json  可恢复")
+    else:
+        print(f"  ⚪ hooks.registry.json 未创建（运行 cc-star init 生成）")
+
+    # 7. 原生记忆
     mem_path = cfg_mgr.get("memory.memory_path")
     if mem_path:
         mem_dir = Path(os.path.expanduser(mem_path))
@@ -401,7 +559,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     else:
         print(f"  ⚠️ 原生记忆未配置 — 设置 memory.memory_path 可启用")
 
-    # 6. 快照 / STATUS
+    # 8. 快照 / STATUS
     for key, label in [("memory.status_path", "STATUS"), ("memory.snapshot_path", "快照")]:
         path = cfg_mgr.get(key)
         if path:
@@ -413,7 +571,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
             else:
                 print(f"  ⚠️ {label}路径不存在 — {p}")
 
-    # 7. OpenViking
+    # 9. OpenViking
     ov_url = cfg_mgr.get("ov.url")
     ov_enabled = cfg_mgr.get("ov.enabled")
     if ov_enabled and ov_url:
@@ -433,9 +591,37 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     print()
     if all_ok:
         print(f"  ✅ 全部就绪！cc-star v{__version__} 运行正常")
+        if fixed_items:
+            print(f"  🔧 本次自动修复: {', '.join(fixed_items)}")
     else:
+        if do_fix and fixed_items:
+            print(f"  🔧 本次自动修复: {', '.join(fixed_items)}")
         print(f"  ⚠️ 存在需要修复的项目，请按上述提示操作")
     print()
+
+
+def cmd_scheduler(args: argparse.Namespace) -> None:
+    """Windows Task Scheduler — manage consolidation timer task."""
+    from cc_star.scheduler import register, status as sched_status, unregister
+
+    result: dict[str, str | bool | dict] = {}
+
+    if args.scheduler_command == "register":
+        result = register()
+    elif args.scheduler_command == "unregister":
+        result = unregister()
+    elif args.scheduler_command == "status":
+        result = sched_status()
+
+    msg = result.get("message", str(result))
+    print()
+    print(f"  📅 cc-star scheduler — {args.scheduler_command}")
+    print(f"  ───────────────────────────────────")
+    print(f"  {msg}")
+    print()
+
+    if not result.get("ok", False):
+        sys.exit(1)
 
 
 def _check_ov_health(url: str) -> bool:
@@ -493,8 +679,40 @@ def main() -> None:
     promote_p.add_argument("--backfill-embeddings", action="store_true",
                            help="Backfill missing embeddings for all traces without one")
 
+    # graph
+    graph_p = sub.add_parser("graph", help="Context graph operations")
+    graph_sub = graph_p.add_subparsers(dest="graph_command", required=True)
+
+    graph_search_p = graph_sub.add_parser("search", help="Search entities and show subgraph")
+    graph_search_p.add_argument("query", help="Entity name or keyword")
+    graph_search_p.add_argument("--limit", type=int, default=10,
+                                help="Max search results (default: 10)")
+    graph_search_p.add_argument("--depth", type=int, default=2,
+                                help="Subgraph depth (default: 2)")
+
+    graph_trace_p = graph_sub.add_parser("trace", help="Trace decision chain for an entity")
+    graph_trace_p.add_argument("query", help="Entity name to trace")
+    graph_trace_p.add_argument("--depth", type=int, default=10,
+                               help="Max trace depth (default: 10)")
+
+    graph_sub.add_parser("stats", help="Context graph statistics")
+
     # doctor
-    sub.add_parser("doctor", help="全面自检：环境 + 配置 + hook + DB + OV 一次查清")
+    doctor_p = sub.add_parser("doctor", help="全面自检：环境 + 配置 + hook + DB + OV 一次查清")
+    doctor_p.add_argument("--fix", action="store_true",
+                          help="自动修复常见问题（配置文件缺失、hook 缺失、hook 注册丢失等）")
+
+    # scheduler (Windows Task Scheduler)
+    scheduler_p = sub.add_parser("scheduler",
+                                  help="管理 Windows 计划任务（凌晨 3:00 consolidation 巩固）")
+    scheduler_sub = scheduler_p.add_subparsers(dest="scheduler_command", required=True)
+
+    scheduler_sub.add_parser("register",
+                              help="注册计划任务：每天 03:00 运行 consolidation")
+    scheduler_sub.add_parser("unregister",
+                              help="删除已注册的计划任务")
+    scheduler_sub.add_parser("status",
+                              help="查询计划任务状态")
 
     args = parser.parse_args()
 
@@ -511,8 +729,12 @@ def main() -> None:
         cmd_uninstall(args)
     elif args.command == "promote":
         cmd_promote(args)
+    elif args.command == "graph":
+        cmd_graph(args)
     elif args.command == "doctor":
         cmd_doctor(args)
+    elif args.command == "scheduler":
+        cmd_scheduler(args)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,93 @@ from cc_star.cache.schema import ensure_schema
 
 from cc_star.config import ConfigManager
 
+_REGISTRY_FILENAME = "hooks.registry.json"
+
+
+def _write_hooks_registry(
+    settings_path: Path,
+    hooks_config: dict[str, list[dict]],
+    config_dir: Path,
+) -> dict[str, Any]:
+    """Write hooks.registry.json as a recoverable snapshot of registered hooks.
+
+    The registry lives in cc-star's own config dir (~/.cc-star/) so it
+    survives settings.json being overwritten by other tools.
+    """
+    registry_path = config_dir / _REGISTRY_FILENAME
+    registry: dict[str, Any] = {
+        "version": "0.7.0",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "source": str(settings_path),
+        "hooks": hooks_config,
+    }
+
+    # Merge with existing registry to preserve created_at on re-registration
+    if registry_path.is_file():
+        try:
+            existing = json.loads(registry_path.read_text(encoding="utf-8"))
+            registry["created_at"] = existing.get("created_at", registry["created_at"])
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = registry_path.with_suffix(".json.tmp")
+    tmp_path.write_text(
+        json.dumps(registry, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    shutil.move(str(tmp_path), str(registry_path))
+    return registry
+
+
+def _read_hooks_registry(config_dir: Path) -> dict[str, Any] | None:
+    """Read hooks.registry.json, return None if missing or corrupt."""
+    registry_path = config_dir / _REGISTRY_FILENAME
+    if not registry_path.is_file():
+        return None
+    try:
+        return json.loads(registry_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _restore_hooks_from_registry(config_dir: Path) -> str | None:
+    """Restore hooks from hooks.registry.json into Claude Code settings.
+
+    Returns a human-readable status string, or None if no registry exists.
+    """
+    registry = _read_hooks_registry(config_dir)
+    if not registry:
+        return None
+
+    hooks_data = registry.get("hooks")
+    if not hooks_data:
+        return None
+
+    settings_path, _ = _find_settings_target()
+    if settings_path.is_file():
+        try:
+            existing = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            existing = {}
+    else:
+        existing = {}
+
+    merged = _merge_hooks(existing, hooks_data)
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+
+    tmp_path = settings_path.with_suffix(".json.tmp")
+    tmp_path.write_text(
+        json.dumps(merged, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    shutil.move(str(tmp_path), str(settings_path))
+
+    event_count = len(hooks_data)
+    return f"已从 registry 恢复 {event_count} 个 hook 事件到 {settings_path}"
+
+
 HOOK_EVENTS: dict[str, dict[str, Any]] = {
     "SessionStart": {
         "template": "session_start.py",
@@ -367,7 +454,7 @@ class HookInstaller:
         return modified
 
     def _register_hooks(self, hooks_dir: Path, config: dict[str, Any]) -> None:
-        """Register hook scripts in Claude Code settings."""
+        """Register hook scripts in Claude Code settings and write registry."""
         settings_path, is_local = _find_settings_target()
         hooks_config = _build_hook_config(hooks_dir, config)
 
@@ -382,10 +469,22 @@ class HookInstaller:
         merged = _merge_hooks(existing, hooks_config)
         settings_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Atomic write
+        # Atomic write to settings.json
         tmp_path = settings_path.with_suffix(".json.tmp")
         tmp_path.write_text(
             json.dumps(merged, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
         shutil.move(str(tmp_path), str(settings_path))
+
+        # Also write hooks.registry.json for disaster recovery
+        config_dir = self._cfg_mgr.config_path.parent
+        _write_hooks_registry(settings_path, hooks_config, config_dir)
+
+    def restore_hooks(self) -> str | None:
+        """Restore hooks from registry into settings.json.
+
+        Returns status string or None if no registry exists.
+        """
+        config_dir = self._cfg_mgr.config_path.parent
+        return _restore_hooks_from_registry(config_dir)
