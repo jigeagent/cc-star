@@ -7,6 +7,7 @@ Uses native schtasks.exe — zero dependencies.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -38,11 +39,26 @@ def _run_schtasks(args: list[str]) -> subprocess.CompletedProcess:
     )
 
 
-def register() -> dict[str, str | bool]:
-    """Register the scheduled task to run consolidation_worker.py daily at 3:00 AM.
+def _validate_time(time_str: str) -> bool:
+    """Validate HH:MM 24-hour format."""
+    return bool(re.match(r"^([01]\d|2[0-3]):[0-5]\d$", time_str))
+
+
+def register(start_time: str = "03:00") -> dict[str, str | bool]:
+    """Register the scheduled task to run consolidation_worker.py daily at *start_time*.
+
+    Args:
+        start_time: HH:MM format, e.g. "23:00" for 11 PM (24-hour).
 
     Returns a status dict with 'ok' and 'message' keys.
     """
+    # Validate time format
+    if not _validate_time(start_time):
+        return {
+            "ok": False,
+            "message": f"❌ 时间格式错误: {start_time!r} — 请使用 HH:MM 24 小时格式（如 23:00）",
+        }
+
     worker = _worker_path()
     python = _python_exe()
 
@@ -62,7 +78,7 @@ def register() -> dict[str, str | bool]:
         "/tn", TASK_NAME,
         "/tr", cmd_str,
         "/sc", "daily",
-        "/st", "03:00",
+        "/st", start_time,
         "/f",  # Force overwrite if exists
         "/ru", "SYSTEM",
     ])
@@ -73,7 +89,7 @@ def register() -> dict[str, str | bool]:
             "message": (
                 f"✅ 已注册计划任务 {TASK_NAME}\n"
                 f"   执行: {cmd_str}\n"
-                f"   时间: 每天 03:00\n"
+                f"   时间: 每天 {start_time}\n"
                 f"   账户: SYSTEM"
             ),
         }
@@ -142,12 +158,26 @@ def status() -> dict[str, str | bool | dict]:
     fields = [f.strip().strip('"') for f in lines[1].split('","')]
     schedule = ""
     task_path = ""
+    start_time = ""
     for i, header in enumerate([h.strip().strip('"') for h in lines[0].split('","')]):
         if i < len(fields):
-            if "schedule" in header.lower():
-                schedule = fields[i]
-            elif "task to run" in header.lower():
+            hl = header.lower()
+            if hl in ("schedule", "计划"):
+                schedule = fields[i].strip()
+            elif hl in ("task to run", "要运行的任务"):
                 task_path = fields[i]
+            elif hl in ("start time", "开始时间"):
+                start_time = fields[i].strip()
+
+    # Build display time from parsed fields
+    # Chinese locale CSV may have "计划数据在此格式中不可用" for schedule field
+    unavailable_markers = ["不可用", "not available", "n/a"]
+    is_unavailable = any(m in schedule.lower() for m in unavailable_markers)
+    sched_display = "每天" if (not schedule or is_unavailable) else schedule
+    if start_time and len(start_time) >= 5:
+        time_display = f"{sched_display} {start_time[:5]}"
+    else:
+        time_display = f"{sched_display}（时间解析异常）"
 
     return {
         "ok": True,
@@ -155,6 +185,6 @@ def status() -> dict[str, str | bool | dict]:
         "message": (
             f"✅ 计划任务 {TASK_NAME} 已注册\n"
             f"   执行: {task_path or '（见任务计划程序）'}\n"
-            f"   时间: 每天 03:00"
+            f"   时间: {time_display}"
         ),
     }

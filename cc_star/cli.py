@@ -607,7 +607,7 @@ def cmd_scheduler(args: argparse.Namespace) -> None:
     result: dict[str, str | bool | dict] = {}
 
     if args.scheduler_command == "register":
-        result = register()
+        result = register(start_time=args.time)
     elif args.scheduler_command == "unregister":
         result = unregister()
     elif args.scheduler_command == "status":
@@ -707,8 +707,10 @@ def main() -> None:
                                   help="管理 Windows 计划任务（凌晨 3:00 consolidation 巩固）")
     scheduler_sub = scheduler_p.add_subparsers(dest="scheduler_command", required=True)
 
-    scheduler_sub.add_parser("register",
-                              help="注册计划任务：每天 03:00 运行 consolidation")
+    register_p = scheduler_sub.add_parser("register",
+                                          help="注册计划任务（默认 03:00，可自定义时间）")
+    register_p.add_argument("--time", default="23:00",
+                            help="执行时间，HH:MM 24 小时格式（默认 23:00）")
     scheduler_sub.add_parser("unregister",
                               help="删除已注册的计划任务")
     scheduler_sub.add_parser("status",
