@@ -17,6 +17,7 @@ ENTITY_TYPES = frozenset({
 RELATION_TYPES = frozenset({
     "references", "depends_on", "produces",
     "decided_by", "cites", "related_to",
+    "conflicts_with",
 })
 
 
@@ -75,11 +76,55 @@ class GraphRepository:
         metadata: dict | None = None,
         created_at: str = "",
     ) -> int:
-        """Return existing entity ID or create a new one."""
+        """Return existing entity ID or create a new one.
+
+        Conflict detection: if the same name exists with a DIFFERENT type,
+        a 'conflicts_with' relation is created between the two entity versions.
+        This flags contradictory classifications without losing either record.
+        """
         existing = self.get_entity_by_name(name)
         if existing:
+            # Type conflict: same entity name, different classification
+            if existing["type"] != entity_type:
+                self._handle_type_conflict(existing, entity_type, description, created_at)
             return existing["id"]
         return self.add_entity(name, entity_type, description, metadata, created_at)
+
+    def _handle_type_conflict(
+        self,
+        existing: dict,
+        incoming_type: str,
+        incoming_desc: str,
+        created_at: str,
+    ) -> None:
+        """Create a conflicts_with event when entity types disagree."""
+        from datetime import datetime, timezone
+        now = created_at or datetime.now(timezone.utc).isoformat()
+
+        conflict_desc = (
+            f"type={incoming_type} vs existing={existing['type']}"
+        )
+
+        # Log the conflict as a timeline event on the existing entity
+        self.add_event(
+            "conflict_detected",
+            entity_id=existing["id"],
+            payload={
+                "field": "type",
+                "existing_value": existing["type"],
+                "incoming_value": incoming_type,
+                "incoming_description": incoming_desc[:200],
+            },
+            created_at=now,
+        )
+
+    def get_conflicts(self, limit: int = 50) -> list[dict]:
+        """Get all conflict_detected timeline events."""
+        return self.get_events(event_type="conflict_detected", limit=limit)
+
+    def conflict_count(self) -> int:
+        """Count outstanding type conflicts."""
+        return len(self.get_conflicts(limit=9999))
 
     def list_entities(
         self,
@@ -399,6 +444,7 @@ class GraphRepository:
             "events": self.event_count(),
             "entity_types": self.entity_counts_by_type(),
             "failed_events": len(self.get_failed_events(limit=1000)),
+            "conflicts": self.conflict_count(),
         }
 
     # ── Helpers ───────────────────────────────────────────────

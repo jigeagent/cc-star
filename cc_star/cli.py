@@ -192,6 +192,28 @@ def cmd_status(args: argparse.Namespace) -> None:
         else:
             print(f"  OpenViking: disabled")
 
+        # hot.md status
+        hot_file = data_dir / "hot.md"
+        if hot_file.is_file():
+            try:
+                hot_size = hot_file.stat().st_size
+                hot_age_hours = 0
+                for line in hot_file.read_text(encoding="utf-8").split("\n"):
+                    if line.startswith("updated_at:"):
+                        from datetime import datetime, timezone
+                        try:
+                            up = datetime.fromisoformat(line.split(":", 1)[1].strip())
+                            hot_age_hours = (datetime.now(timezone.utc) - up).total_seconds() / 3600
+                        except (ValueError, TypeError):
+                            pass
+                        break
+                age_hint = f" ({hot_age_hours:.0f}h 前)" if hot_age_hours > 0 else ""
+                print(f"  hot.md:   {hot_size}b{age_hint}")
+            except OSError:
+                pass
+        else:
+            print(f"  hot.md:   (not written yet)")
+
         # Last session
         sessions_file = data_dir / "sessions.jsonl"
         if sessions_file.is_file():
@@ -372,6 +394,19 @@ def cmd_graph(args: argparse.Namespace) -> None:
             stats = repo.stats()
             json.dump({"ok": True, "stats": stats}, sys.stdout,
                       indent=2, ensure_ascii=False)
+
+        elif sub == "conflicts":
+            limit = getattr(args, "limit", 50)
+            conflicts = repo.get_conflicts(limit=limit)
+            json.dump({
+                "ok": True,
+                "conflict_count": len(conflicts),
+                "conflicts": [{
+                    "entity_id": c["entity_id"],
+                    "payload": c["payload"],
+                    "created_at": c["created_at"],
+                } for c in conflicts],
+            }, sys.stdout, indent=2, ensure_ascii=False)
 
     finally:
         cache.close()
@@ -696,6 +731,10 @@ def main() -> None:
                                help="Max trace depth (default: 10)")
 
     graph_sub.add_parser("stats", help="Context graph statistics")
+
+    conflicts_p = graph_sub.add_parser("conflicts", help="Show type conflicts between entities")
+    conflicts_p.add_argument("--limit", type=int, default=50,
+                             help="Max conflicts to show (default: 50)")
 
     # doctor
     doctor_p = sub.add_parser("doctor", help="全面自检：环境 + 配置 + hook + DB + OV 一次查清")
