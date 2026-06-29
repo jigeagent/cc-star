@@ -1,4 +1,8 @@
-"""Tests for graph_extract.py hook — entity extraction + graph.db integration."""
+"""Tests for graph_extract.py hook — entity extraction + graph.db integration.
+
+Core extraction tests now validate against cc_star.graph.extractor
+(the module that graph_extract.py imports from).
+"""
 
 import json
 import os
@@ -6,10 +10,13 @@ import tempfile
 
 import pytest
 
-# Import the hook module
-import sys
-sys.path.insert(0, os.path.expanduser("~/.cc-star/hooks"))
-import graph_extract as ge
+from cc_star.graph.extractor import (
+    clean_text,
+    extract_entities,
+    extract_entities_regex,
+    is_junk_entity,
+    load_spacy,
+)
 
 
 # ── Text cleaning ────────────────────────────────────────────
@@ -21,7 +28,7 @@ def test_clean_text_strips_bridge_context():
 <user_input>
 {"text":"虎哥审了cc-star v0.7.0方案"}
 </user_input>"""
-    cleaned = ge.clean_text(text)
+    cleaned = clean_text(text)
     assert "虎哥" in cleaned
     assert "chatId" not in cleaned
     assert "bridge_context" not in cleaned
@@ -31,14 +38,14 @@ def test_clean_text_strips_bridge_context():
 def test_clean_text_strips_quoted_message():
     text = """<quoted_message id="om_xxx" sender_name="test">old message</quoted_message>
 虎哥说用SQLite"""
-    cleaned = ge.clean_text(text)
+    cleaned = clean_text(text)
     assert "虎哥" in cleaned
     assert "quoted_message" not in cleaned
 
 
 def test_clean_text_strips_json_prefix():
     text = '{"chatId":"oc_301","chatType":"p2p"}实际消息内容'
-    cleaned = ge.clean_text(text)
+    cleaned = clean_text(text)
     assert "实际消息内容" in cleaned
     assert "chatId" not in cleaned
 
@@ -54,7 +61,7 @@ def test_clean_text_strips_json_prefix():
     "c41c53cc",
 ])
 def test_is_junk_entity_positive(name):
-    assert ge._is_junk_entity(name), f"should reject: {name}"
+    assert is_junk_entity(name), f"should reject: {name}"
 
 
 @pytest.mark.parametrize("name", [
@@ -63,14 +70,14 @@ def test_is_junk_entity_positive(name):
     "D:/WorkBuddy/workspace/plans/cc-star-v0.7.0-architecture-upgrade.md",
 ])
 def test_is_junk_entity_negative(name):
-    assert not ge._is_junk_entity(name), f"should accept: {name}"
+    assert not is_junk_entity(name), f"should accept: {name}"
 
 
 # ── Regex extraction ─────────────────────────────────────────
 
 def test_extract_entities_regex_team():
     text = "虎哥和康少审了方案，好妹也看了。吉哥最终拍板。"
-    entities = ge.extract_entities_regex(text)
+    entities = extract_entities_regex(text)
     names = {e["name"] for e in entities}
     assert "虎哥" in names
     assert "康少" in names
@@ -80,7 +87,7 @@ def test_extract_entities_regex_team():
 
 def test_extract_entities_regex_technical():
     text = "cc-star v0.7.0 用 SQLite 做 graph.db，不用 Neo4j。用递归CTE查询。"
-    entities = ge.extract_entities_regex(text)
+    entities = extract_entities_regex(text)
     names = {e["name"] for e in entities}
     assert "cc-star" in names
     assert "SQLite" in names
@@ -91,14 +98,14 @@ def test_extract_entities_regex_technical():
 
 def test_extract_entities_regex_files():
     text = "方案在 D:/WorkBuddy/workspace/plans/cc-star-v0.7.0-architecture-upgrade.md"
-    entities = ge.extract_entities_regex(text)
+    entities = extract_entities_regex(text)
     names = {e["name"] for e in entities}
     assert "D:/WorkBuddy/workspace/plans/cc-star-v0.7.0-architecture-upgrade.md" in names
 
 
 def test_extract_entities_regex_decision():
     text = "决定：用SQLite不用Neo4j。判断：凌晨3点跑。裁决：采纳康少方案。"
-    entities = ge.extract_entities_regex(text)
+    entities = extract_entities_regex(text)
     decisions = [e for e in entities if e["type"] == "decision"]
     # "SQLite" and "Neo4j" are also decision-type entities from regex rules
     assert len(decisions) == 5
@@ -108,8 +115,8 @@ def test_extract_entities_regex_decision():
 
 def test_extract_entities_mixed():
     text = "虎哥在北京审查了cc-star v0.7.0方案，2025年6月决定用SQLite。"
-    nlp = ge.load_spacy()
-    entities = ge.extract_entities(text, nlp)
+    nlp = load_spacy()
+    entities = extract_entities(text, nlp)
     names = {e["name"] for e in entities}
     # Regex hits
     assert "虎哥" in names
@@ -123,13 +130,13 @@ def test_extract_entities_mixed():
 
 
 def test_extract_entities_empty_text():
-    entities = ge.extract_entities("", None)
+    entities = extract_entities("", None)
     assert len(entities) == 0
 
 
 def test_extract_entities_no_spacy():
     text = "虎哥审了SQLite方案"
-    entities = ge.extract_entities(text, None)
+    entities = extract_entities(text, None)
     names = {e["name"] for e in entities}
     # Regex-only should still work
     assert "虎哥" in names
@@ -139,5 +146,5 @@ def test_extract_entities_no_spacy():
 # ── spaCy model ──────────────────────────────────────────────
 
 def test_spacy_model_available():
-    nlp = ge.load_spacy()
+    nlp = load_spacy()
     assert nlp is not None, "zh_core_web_sm should be installed"
