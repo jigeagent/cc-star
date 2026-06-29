@@ -261,6 +261,9 @@ def _get_template_vars(config: dict[str, Any]) -> dict[str, str]:
         "promote_cooldown_days": str(config.get("memory", {}).get("promote_cooldown_days", 7)),
         "max_cache_mb": str(config.get("memory", {}).get("max_cache_mb", 500)),
         "max_inject_native": str(config.get("memory", {}).get("max_inject_native", 3)),
+        "hot_path": os.path.join(storage_path, "hot.md"),
+        "hot_enabled": str(config.get("memory", {}).get("hot_enabled", True)),
+        "hot_max_age_hours": str(config.get("memory", {}).get("hot_max_age_hours", 24)),
     }
 
 

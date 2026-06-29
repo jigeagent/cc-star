@@ -34,7 +34,10 @@ except Exception:
 CACHE_PATH = os.path.expanduser(os.environ.get("CC_STAR_CACHE_PATH", "$cache_path"))
 OV_URL = os.environ.get("CC_STAR_OV_URL", _GET("ov.url", "$ov_url"))
 OV_ENABLED = os.environ.get("CC_STAR_OV_ENABLED", "$ov_enabled") in ("1", "true", "True")
-NATIVE_MEMORY_PATH = os.path.expanduser(
+NATIVE_HOT_PATH = os.path.expanduser(os.environ.get("CC_STAR_HOT_PATH", "$hot_path"))
+HOT_ENABLED = os.environ.get("CC_STAR_HOT_ENABLED", "$hot_enabled") in ("1", "true", "True")
+
+MEMORY_PATH = os.path.expanduser(
     os.environ.get("CC_STAR_MEMORY_PATH", _GET("memory.memory_path", "$memory_path"))
 )
 if not NATIVE_MEMORY_PATH:
@@ -370,6 +373,70 @@ def main() -> None:
 
     # Memory promotion (best-effort, after main storage)
     _do_promote(user_content, assistant_content)
+
+    # hot.md — cross-session continuation snapshot
+    if HOT_ENABLED:
+        try:
+            _write_hot(user_content, assistant_content, session_id)
+        except Exception as e:
+            print(f"[store] hot.md write error: {e}", file=sys.stderr)
+
+
+def _write_hot(user_content: str, assistant_content: str, session_id: str) -> None:
+    """Write hot.md with a summary of this session's last turn."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Extract a summary from the conversation
+    summary = user_content[:200] if user_content else ""
+    if len(summary) >= 200:
+        summary = summary[:197] + "..."
+
+    # Read existing hot.md to preserve created_at
+    existing_meta = {}
+    existing_body = ""
+    hot_file = Path(HOT_PATH)
+    if hot_file.is_file():
+        try:
+            text = hot_file.read_text(encoding="utf-8")
+            lines = text.split("\n")
+            if lines and lines[0].strip() == "---":
+                for i in range(1, len(lines)):
+                    if lines[i].strip() == "---":
+                        existing_body = "\n".join(lines[i+1:]).strip()
+                        break
+                    if ":" in lines[i]:
+                        k, _, v = lines[i].partition(":")
+                        existing_meta[k.strip()] = v.strip()
+        except OSError:
+            pass
+
+    # Build frontmatter
+    created = existing_meta.get("created_at", now)
+    meta_lines = [
+        "---",
+        f"updated_at: {now}",
+        f"created_at: {created}",
+        f"session_id: {session_id}",
+        "---",
+        "",
+    ]
+
+    # Build body — last session summary (keep it concise)
+    body_lines = [
+        "## 当前工作",
+        "",
+        f"{summary}",
+        "",
+    ]
+    if existing_body and len(existing_body) > 10:
+        # Keep existing todo/notes if they exist
+        body_lines.append("---")
+        body_lines.append("")
+        body_lines.append(existing_body)
+
+    hot_file.parent.mkdir(parents=True, exist_ok=True)
+    hot_file.write_text("\n".join(meta_lines + body_lines), encoding="utf-8")
 
 
 if __name__ == "__main__":

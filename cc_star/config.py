@@ -34,6 +34,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "promote_cooldown_days": 7,
         "max_cache_mb": 1000,
         "max_inject_native": 3,
+        "hot_enabled": True,
+        "hot_max_age_hours": 24,
     },
     "ov": {
         "enabled": False,
