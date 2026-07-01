@@ -20,6 +20,7 @@ from cc_star.cache.connection import CacheConnection
 from cc_star.cache.schema import ensure_schema
 from cc_star.cache.traces import TraceRepository
 from cc_star.memos.id import new_id
+from cc_star.memos import patterns as pattern_capture
 from cc_star.memos.types import TraceRow
 
 # ── Runtime config ──
@@ -374,12 +375,65 @@ def main() -> None:
     # Memory promotion (best-effort, after main storage)
     _do_promote(user_content, assistant_content)
 
+    # Pattern capture — extract user preferences from conversation
+    try:
+        _do_pattern_capture(user_content)
+    except Exception as e:
+        print(f"[store] pattern capture error: {e}", file=sys.stderr)
+
     # hot.md — cross-session continuation snapshot
     if HOT_ENABLED:
         try:
             _write_hot(user_content, assistant_content, session_id)
         except Exception as e:
             print(f"[store] hot.md write error: {e}", file=sys.stderr)
+
+
+# ── Pattern Capture ──
+
+
+def _do_pattern_capture(user_content: str) -> None:
+    """Scan user input for behavior patterns and auto-promote at threshold."""
+    if not user_content:
+        return
+
+    # Increment counters for any matched patterns
+    updated = pattern_capture.increment(user_content)
+    if not updated:
+        return
+
+    for rec in updated:
+        print(f"[store] pattern [{rec.get('label', rec['pattern_id'])}] "
+              f"{rec['value']} ({rec['count']}x)", file=sys.stderr)
+
+    # Promote any patterns that hit threshold
+    if not PROMOTE_ENABLED:
+        return
+    if not NATIVE_MEMORY_PATH:
+        return
+
+    ready = pattern_capture.get_ready_for_promotion(PROMOTE_THRESHOLD)
+    for rec in ready:
+        pid = rec["pattern_id"]
+        value = rec["value"]
+        count = rec["count"]
+
+        # Write to native memory
+        native_dir = Path(NATIVE_MEMORY_PATH)
+        native_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = re.sub(r'[^\w一-鿿\-]', '_', value)[:40].strip("_").lower()
+        if not safe_name:
+            safe_name = f"pattern_{pid}_{datetime.now(timezone.utc).strftime('%Y%m%d')}"
+        filepath = native_dir / f"pref_{safe_name}.md"
+
+        try:
+            md = pattern_capture.render_preference_md(pid, value, count)
+            filepath.write_text(md, encoding="utf-8")
+            pattern_capture.mark_promoted(pid, value)
+            _log_promotion(f"pattern:{pid}:{value[:20]}", str(filepath))
+            print(f"[store] pattern promoted → {filepath.name}", file=sys.stderr)
+        except OSError as e:
+            print(f"[store] pattern promote write error: {e}", file=sys.stderr)
 
 
 def _write_hot(user_content: str, assistant_content: str, session_id: str) -> None:

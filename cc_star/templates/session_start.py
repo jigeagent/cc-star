@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 
 OV_URL = os.environ.get("CC_STAR_OV_URL", "$ov_url")
+OV_ENABLED = os.environ.get("CC_STAR_OV_ENABLED", "$ov_enabled") in ("1", "true", "True")
+AGENT_NAME = os.environ.get("CC_STAR_AGENT_NAME", "$agent_name")
 SESSIONS_FILE = Path(os.path.expanduser("$sessions_file"))
 HOT_PATH = Path(os.path.expanduser("$hot_path"))
 HOT_ENABLED = os.environ.get("CC_STAR_HOT_ENABLED", "$hot_enabled") in ("1", "true", "True")
@@ -100,8 +102,39 @@ def read_hot_context() -> str | None:
     return body
 
 
+def write_ov_anchor() -> None:
+    """Write a heartbeat anchor to OpenViking so other agents see active status."""
+    if not OV_URL or not OV_ENABLED:
+        return
+    try:
+        from datetime import datetime, timezone
+        from cc_star.ov.client import OpenVikingClient
+        import uuid
+        client = OpenVikingClient(base_url=OV_URL, timeout=3.0)
+        agent = AGENT_NAME or "baoge"
+        now = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "last_active": now,
+            "session_id": str(uuid.uuid4()),
+            "status": "active",
+            "host": "codex",
+        }
+        client.content_write(
+            f"viking://agent/{agent}/sessions/last-active.md",
+            payload,
+        )
+    except Exception as e:
+        # OV offline — silent degrade
+        print(f"[session_start] OV anchor write error: {e}", file=sys.stderr)
+
+
 def main() -> None:
     ov_ok = check_ov_health()
+
+    # Write heartbeat anchor to OpenViking
+    if ov_ok:
+        write_ov_anchor()
+
     msg_parts = []
     if ov_ok:
         msg_parts.append("OV:online")
