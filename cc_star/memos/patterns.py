@@ -50,14 +50,27 @@ _COUNTER_FILE = "pattern_counter.jsonl"
 
 
 def _counter_path() -> Path:
-    """Resolve pattern_counter.jsonl next to cache.db."""
+    """Resolve pattern_counter.jsonl next to cache.db.
+
+    Priority: CC_STAR_DATA_DIR env > CC_STAR_CACHE_PATH env > config.yaml > fallback.
+    """
     data_dir = os.environ.get("CC_STAR_DATA_DIR", "")
     if data_dir:
         return Path(os.path.expanduser(data_dir)) / _COUNTER_FILE
-    # Fallback: next to promote_log.jsonl
     cache_path = os.environ.get("CC_STAR_CACHE_PATH", "")
     if cache_path:
         return Path(os.path.expanduser(cache_path)).parent / _COUNTER_FILE
+    # Try reading config.yaml
+    try:
+        import yaml
+        cfg_path = Path.home() / ".cc-star" / "config.yaml"
+        if cfg_path.is_file():
+            cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+            storage_path = cfg.get("storage", {}).get("path", "")
+            if storage_path:
+                return Path(os.path.expanduser(storage_path)) / _COUNTER_FILE
+    except Exception:
+        pass
     return Path.home() / ".cc-star" / "data" / _COUNTER_FILE
 
 
@@ -241,3 +254,21 @@ def render_preference_md(pattern_id: str, value: str, count: int) -> str:
         f"---\n"
         f"_由 cc-star pattern_capture 自动生成 · {today}_\n"
     )
+
+
+# ── Public wrappers for CLI access ──
+
+
+def load_all_counters() -> dict[str, list[dict]]:
+    """Load all counter records (public wrapper)."""
+    return _load_counters()
+
+
+def save_all_counters(groups: dict[str, list[dict]]) -> None:
+    """Save all counter records (public wrapper)."""
+    _save_counters(groups)
+
+
+def get_counter_path() -> str:
+    """Get the counter file path (public wrapper)."""
+    return str(_counter_path())

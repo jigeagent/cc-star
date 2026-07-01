@@ -26,6 +26,7 @@ from cc_star.cache.traces import TraceRepository
 from cc_star import __version__
 from cc_star.config import ConfigManager
 from cc_star.installer import HookInstaller
+from cc_star.memos import patterns as pattern_capture
 
 
 def _get_config_manager() -> ConfigManager:
@@ -671,6 +672,113 @@ def _check_ov_health(url: str) -> bool:
         return False
 
 
+# ── Profile ──
+
+
+def cmd_profile(args: argparse.Namespace) -> None:
+    """Show user behavior pattern profile."""
+    from cc_star.memos import patterns as pattern_capture
+
+    action = args.profile_command
+    cfg_mgr = _get_config_manager()
+    cfg = cfg_mgr.load()
+    agent_name = cfg.get("agent", {}).get("name", "assistant")
+
+    if action == "list" or action is None:
+        _profile_list()
+    elif action == "clear":
+        _profile_clear(args.value)
+    elif action == "stats":
+        _profile_stats()
+    else:
+        print(f"  Unknown profile command: {action}")
+
+
+def _profile_list() -> None:
+    """Display all tracked patterns in a table."""
+    groups = pattern_capture.load_all_counters()
+    if not groups:
+        print("  📋 用户行为画像 — 暂无记录")
+        return
+
+    # Flatten all records
+    all_recs: list[dict] = []
+    for recs in groups.values():
+        all_recs.extend(recs)
+
+    if not all_recs:
+        print("  📋 用户行为画像 — 暂无记录")
+        return
+
+    # Sort by count desc
+    all_recs.sort(key=lambda r: r.get("count", 0), reverse=True)
+
+    print(f"  📋 用户行为画像 ({len(all_recs)} 条)")
+    print()
+    # Header
+    print(f"  {'模式':<14} {'值':<30} {'命中':<6} {'状态':<10}")
+    print(f"  {'─'*14} {'─'*30} {'─'*6} {'─'*10}")
+    for rec in all_recs:
+        label = rec.get("label", rec.get("pattern_id", "?"))[:12]
+        value = rec.get("value", "?")[:28]
+        count = rec.get("count", 0)
+        status = "✅ 已固化" if rec.get("promoted") else f"🔄 {count}/3"
+        print(f"  {label:<14} {value:<30} {count:<6} {status:<10}")
+
+    print()
+    print("  ﹒promoted = 已晋升到原生记忆，SessionStart 自动注入")
+    print("  ﹒计数 ≥ 3 时自动晋升")
+
+
+def _profile_clear(pattern_value: str | None) -> None:
+    """Clear a specific pattern or all patterns."""
+    if not pattern_value or pattern_value == "--all":
+        # Confirm
+        from pathlib import Path
+        counter_path = Path(pattern_capture.get_counter_path())
+        if counter_path.is_file():
+            counter_path.write_text("", encoding="utf-8")
+            print("  ✅ 所有行为模式已清除")
+        else:
+            print("  ⚠️ 暂无记录")
+        return
+
+    groups = pattern_capture.load_all_counters()
+    found = False
+    for pid, recs in list(groups.items()):
+        groups[pid] = [r for r in recs if r.get("value") != pattern_value]
+        if len(groups[pid]) != len(recs):
+            found = True
+        if not groups[pid]:
+            del groups[pid]
+    if found:
+        pattern_capture.save_all_counters(groups)
+        print(f"  ✅ 已清除模式: {pattern_value}")
+    else:
+        print(f"  ⚠️ 未找到: {pattern_value}")
+
+
+def _profile_stats() -> None:
+    """Show pattern statistics."""
+    groups = pattern_capture.load_all_counters()
+    total = sum(len(recs) for recs in groups.values())
+    promoted = sum(
+        1 for recs in groups.values() for r in recs if r.get("promoted")
+    )
+    pending = sum(
+        1 for recs in groups.values() for r in recs if r.get("count", 0) >= 3 and not r.get("promoted")
+    )
+    high_count = sum(
+        1 for recs in groups.values() for r in recs if r.get("count", 0) >= 5
+    )
+    print(f"  📊 模式统计")
+    print(f"  总记录: {total}")
+    print(f"  已固化: {promoted}")
+    print(f"  待晋升: {pending}")
+    print(f"  高置信 (≥5次): {high_count}")
+    print(f"  覆盖类别: {len(groups)}")
+
+
 def main() -> None:
     """Entry point for cc-star CLI."""
     parser = argparse.ArgumentParser(
@@ -736,6 +844,19 @@ def main() -> None:
     conflicts_p.add_argument("--limit", type=int, default=50,
                              help="Max conflicts to show (default: 50)")
 
+    # profile
+    profile_p = sub.add_parser("profile", help="Show/manage user behavior pattern profile")
+    profile_sub = profile_p.add_subparsers(dest="profile_command")
+
+    profile_sub.add_parser("list", help="List all tracked patterns")
+    profile_p.set_defaults(profile_command="list")
+
+    profile_clear_p = profile_sub.add_parser("clear", help="Clear a specific pattern or all patterns")
+    profile_clear_p.add_argument("value", nargs="?", default="--all",
+                                  help="Pattern value to clear (default: --all)")
+
+    profile_sub.add_parser("stats", help="Pattern statistics")
+
     # doctor
     doctor_p = sub.add_parser("doctor", help="全面自检：环境 + 配置 + hook + DB + OV 一次查清")
     doctor_p.add_argument("--fix", action="store_true",
@@ -774,6 +895,8 @@ def main() -> None:
         cmd_graph(args)
     elif args.command == "doctor":
         cmd_doctor(args)
+    elif args.command == "profile":
+        cmd_profile(args)
     elif args.command == "scheduler":
         cmd_scheduler(args)
 
