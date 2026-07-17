@@ -1,0 +1,50 @@
+{
+  "name": "cc-star-mcp",
+  "version": "0.8.0",
+  "description": "Hierarchical memory system for Claude Code — BM25+Vector hybrid search, Ebbinghaus forgetting curve, user feedback loop. MCP server interface.",
+  "author": {
+    "name": "hermesnext",
+    "email": "hermesnext@users.noreply.github.com",
+    "url": "https://github.com/jigeagent/cc-star"
+  },
+  "homepage": "https://github.com/jigeagent/cc-star",
+  "license": "AGPL-3.0-or-later",
+  "keywords": [
+    "claude-code",
+    "memory",
+    "hierarchical-memory",
+    "mcp",
+    "mcp-server",
+    "claude",
+    "anthropic",
+    "vector-search",
+    "bm25",
+    "faiss",
+    "hybrid-search",
+    "ebbinghaus"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jigeagent/cc-star.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jigeagent/cc-star/issues"
+  },
+  "bin": {
+    "cc-star": "./bin/cc-star.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "preferUnplugged": true,
+  "files": [
+    "bin/",
+    "README.md",
+    "LICENSE"
+  ]
+}

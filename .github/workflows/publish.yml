@@ -1,4 +1,4 @@
-name: Publish to PyPI
+name: Publish to PyPI & npm
 
 on:
   push:
@@ -6,7 +6,8 @@ on:
       - "v*"
 
 jobs:
-  publish:
+  publish-pypi:
+    name: Publish to PyPI
     runs-on: ubuntu-latest
 
     steps:
@@ -30,3 +31,24 @@ jobs:
         with:
           password: ${{ secrets.PYPI_TOKEN }}
           skip-existing: true
+
+  publish-npm:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: npm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

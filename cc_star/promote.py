@@ -772,7 +772,7 @@ def check_startup_health() -> dict[str, Any]:
 
 
 def run_maintenance(dry_run: bool = False) -> dict[str, Any]:
-    """Run full maintenance cycle: cache limit → dedup → promote → trim."""
+    """Run full maintenance cycle: cache limit → dedup → promote → trim → hmem rebuild."""
     results = {
         "cache_limit": enforce_cache_limit(dry_run=dry_run),
         "native_dedup": dedup_native_memory(dry_run=dry_run),
@@ -781,7 +781,68 @@ def run_maintenance(dry_run: bool = False) -> dict[str, Any]:
         "startup_health": check_startup_health(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+    # Auto-rebuild hmem hierarchy after promote (when new traces are created)
+    if not dry_run:
+        try:
+            hmem_result = _rebuild_hmem()
+            results["hmem_rebuild"] = hmem_result
+        except Exception as e:
+            results["hmem_rebuild"] = {"status": "error", "message": str(e)}
+    else:
+        results["hmem_rebuild"] = {"status": "skipped", "reason": "dry_run"}
+
     return results
+
+
+def _rebuild_hmem() -> dict[str, Any]:
+    """Rebuild hmem hierarchy from latest traces. Does incremental update if possible."""
+    from cc_star.cache.traces import TraceRepository
+    from cc_star.hmem.store import HierarchicalStore
+    from cc_star.hmem.migration import HierarchyMigration
+    from cc_star.hmem.router import IndexRouter
+
+    cfg = ConfigManager()
+    data_dir = cfg.data_dir
+
+    # Check if hmem has existing data
+    hmem_path = data_dir / "hmem.db"
+    if not hmem_path.is_file():
+        return {"status": "skipped", "reason": "hmem not initialized yet"}
+
+    cache = CacheConnection(str(data_dir / "cache.db"))
+    ensure_schema(cache)
+    repo = TraceRepository(cache)
+
+    hmem_cache = CacheConnection(str(hmem_path))
+    store = HierarchicalStore(hmem_cache)
+
+    # Count un-migrated traces
+    existing = store.get_layer_nodes("episode")
+    existing_ids = {n.source_trace_id for n in existing if n.source_trace_id}
+    all_traces = repo.list_recent(limit=50000)
+    new_traces = [t for t in all_traces if t.id not in existing_ids and t.embedding]
+
+    if not new_traces:
+        # No new traces, just ensure indexes are up to date
+        router = IndexRouter(store)
+        router.build_indexes()
+        hmem_cache.close()
+        cache.close_all()
+        return {"status": "ok", "action": "rebuild_indexes", "new_traces": 0}
+
+    # Run incremental update (preferred) or full build
+    migration = HierarchyMigration(repo, store)
+    result = migration.incremental_update()
+
+    hmem_cache.close()
+    cache.close_all()
+    return {
+        "status": "ok",
+        "action": "incremental_update" if result.get("status") == "incremental_ok" else "build",
+        "new_traces": len(new_traces),
+        "details": result,
+    }
 
 
 # ── 7. Embedding backfill ──
@@ -810,7 +871,7 @@ def backfill_embeddings(
         return {"error": f"cannot open cache: {e}"}
 
     all_traces = repo.list_recent(limit=50000)
-    target_dim = 384  # fastembed bge-small-en-v1.5
+    target_dim = 512  # fastembed bge-small-zh-v1.5
     pending = [
         t for t in all_traces
         if t.embedding is None or len(t.embedding) != target_dim

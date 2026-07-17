@@ -862,6 +862,60 @@ def main() -> None:
     doctor_p.add_argument("--fix", action="store_true",
                           help="自动修复常见问题（配置文件缺失、hook 缺失、hook 注册丢失等）")
 
+    # hmem (H-MEM hierarchy)
+    hmem_p = sub.add_parser("hmem", help="H-MEM hierarchical memory (v3)")
+    hmem_sub = hmem_p.add_subparsers(dest="hmem_command", required=True)
+
+    hmem_build_p = hmem_sub.add_parser("build", help="Build hierarchy from flat traces")
+    hmem_build_p.add_argument("--domains", type=int, default=8,
+                              help="Number of domains to create (default: 8)")
+    hmem_build_p.add_argument("--categories", type=int, default=5,
+                              help="Categories per domain (default: 5)")
+    hmem_build_p.add_argument("--dry-run", "-n", action="store_true",
+                              help="Preview without building")
+
+    hmem_sub.add_parser("status", help="Show H-MEM hierarchy status")
+
+    hmem_query_p = hmem_sub.add_parser("query", help="Test hierarchical retrieval")
+    hmem_query_p.add_argument("query", help="Natural language query")
+    hmem_query_p.add_argument("--top-k", type=int, default=5,
+                              help="Results per layer (default: 5)")
+    hmem_query_p.add_argument("--beam-width", type=int, default=3,
+                              help="Beam search width (default: 3)")
+    hmem_query_p.add_argument("--mode", choices=["hybrid", "hierarchy", "flat"],
+                              default="hybrid",
+                              help="Retrieval mode (default: hybrid)")
+
+    hmem_tree_p = hmem_sub.add_parser("tree", help="Visualize hierarchy tree")
+    hmem_tree_p.add_argument("--depth", type=int, default=2,
+                             help="Tree depth (default: 2)")
+
+    hmem_sub.add_parser("rebuild-index", help="Rebuild FAISS indexes")
+
+    hmem_decay_p = hmem_sub.add_parser("decay", help="Run Ebbinghaus decay scheduler")
+    hmem_decay_p.add_argument("--full", action="store_true",
+                              help="Full decay sweep (all nodes)")
+    hmem_decay_p.add_argument("--dry-run", "-n", action="store_true",
+                              help="Preview without updating")
+
+    hmem_feedback_p = hmem_sub.add_parser("feedback", help="Show feedback statistics")
+    hmem_feedback_p.add_argument("--node-id", type=str, default=None,
+                                 help="Show feedback for a specific node")
+    hmem_feedback_p.add_argument("--limit", type=int, default=20,
+                                 help="Max feedback events (default: 20)")
+
+    # hmem eval
+    hmem_eval_p = hmem_sub.add_parser("eval", help="Evaluate retrieval quality (recall/MRR)")
+    hmem_eval_p.add_argument("--num-queries", type=int, default=20,
+                             help="Number of test queries (default: 20)")
+    hmem_eval_p.add_argument("--flat-baseline", action="store_true",
+                             help="Include flat search baseline comparison")
+
+    # hmem compare
+    hmem_compare_p = hmem_sub.add_parser("compare", help="A/B compare old vs new routing")
+    hmem_compare_p.add_argument("--num-queries", type=int, default=20,
+                                help="Number of test queries (default: 20)")
+
     # scheduler (Windows Task Scheduler)
     scheduler_p = sub.add_parser("scheduler",
                                   help="管理 Windows 计划任务（凌晨 3:00 consolidation 巩固）")
@@ -899,6 +953,35 @@ def main() -> None:
         cmd_profile(args)
     elif args.command == "scheduler":
         cmd_scheduler(args)
+    elif args.command == "hmem":
+        _dispatch_hmem(args)
+
+
+def _dispatch_hmem(args: argparse.Namespace) -> None:
+    """Dispatch H-MEM commands."""
+    from cc_star.hmem.cli import (
+        cmd_build, cmd_status, cmd_query, cmd_tree,
+        cmd_rebuild_index, cmd_decay, cmd_feedback,
+        cmd_eval, cmd_compare,
+    )
+
+    dispatch = {
+        "build": cmd_build,
+        "status": cmd_status,
+        "query": cmd_query,
+        "tree": cmd_tree,
+        "rebuild-index": cmd_rebuild_index,
+        "decay": cmd_decay,
+        "feedback": cmd_feedback,
+        "eval": cmd_eval,
+        "compare": cmd_compare,
+    }
+
+    handler = dispatch.get(args.hmem_command)
+    if handler:
+        handler(args)
+    else:
+        print(f"Unknown hmem command: {args.hmem_command}")
 
 
 if __name__ == "__main__":
